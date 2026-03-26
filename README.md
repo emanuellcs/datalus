@@ -1,4 +1,4 @@
-# DATALUS: Diffusion Augmented Tabular Architecture for Local Utility and Security
+# DATALUS: Diffusion-Augmented Tabular Architecture for Local Utility and Security
 
 > **English** | [Avaliadores do Prêmio Jovem Cientista: Leia a documentação em Português aqui](./README_pt-BR.md)
 
