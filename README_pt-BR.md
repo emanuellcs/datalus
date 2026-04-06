@@ -8,13 +8,13 @@
 [![Licença: Apache 2.0](https://img.shields.io/badge/Licença-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Hugging Face](https://img.shields.io/badge/Artefatos-HuggingFace-yellow.svg)](https://huggingface.co/)
 
-**Autor:** Emanuel Lázaro Custódio Silva
-**Submissão Oficial:** 32º Prêmio Jovem Cientista (2026)
-**Tema Central:** Inteligência Artificial para o Bem Comum
-**Linha de Pesquisa:** Inteligência Artificial e Tecnologia
-**Categoria:** Estudante do Ensino Superior
-**Instituição:** Centro Universitário Internacional (UNINTER), Ciência da Computação
-**Orientador:** *A ser definido*
+- **Autor:** Emanuel Lázaro Custódio Silva
+- **Submissão Oficial:** 32º Prêmio Jovem Cientista (2026)
+- **Tema Central:** Inteligência Artificial para o Bem Comum
+- **Linha de Pesquisa:** Inteligência Artificial e Tecnologia
+- **Categoria:** Estudante do Ensino Superior
+- **Instituição:** Centro Universitário Internacional (UNINTER), Ciência da Computação
+- **Orientador:** *A ser definido*
 
 ## Nota Introdutória
 
