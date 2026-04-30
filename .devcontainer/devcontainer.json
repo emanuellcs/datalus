@@ -10,7 +10,7 @@
 			"moby": false,
 			"installDockerCompose": true
 		},
-		"ghcr.io/devcontainers/features/node:1": {},
+		"ghcr.io/devcontainers/features/node:2": {},
 		"ghcr.io/devcontainers/features/python:1": {}
 	}
 
