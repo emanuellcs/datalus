@@ -42,10 +42,10 @@ dev = [
 ]
 
 [project.scripts]
-datalus = "datalus.cli:app"
+datalus = "datalus.interfaces.cli:app"
 
-[tool.setuptools]
-packages = ["datalus"]
+[tool.setuptools.packages.find]
+include = ["datalus*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

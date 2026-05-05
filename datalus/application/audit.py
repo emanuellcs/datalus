@@ -1,10 +1,14 @@
-"""Autonomous Audit Orchestrator metrics for privacy and utility."""
+"""Autonomous Audit Orchestrator application use case.
+
+The OAA belongs in the application layer because it coordinates privacy and
+utility policies. Its sklearn and gradient-boosting details are implementation
+choices hidden behind this use-case facade.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -18,27 +22,9 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from datalus.domain.schemas import PrivacyThresholds, ShadowMIAConfig
+
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class PrivacyThresholds:
-    """Default privacy thresholds from the README/OAA protocol."""
-
-    memorization_ratio: float = 0.01
-    mia_roc_auc: float = 0.55
-    dcr_percentile: float = 1.0
-
-
-@dataclass(slots=True)
-class ShadowMIAConfig:
-    """Configuration for black-box shadow membership inference."""
-
-    n_shadow_models: int = 4
-    shadow_train_fraction: float = 0.5
-    synthetic_multiplier: float = 1.0
-    n_neighbors: int = 5
-    random_state: int = 42
 
 
 class PrivacyEvaluator:

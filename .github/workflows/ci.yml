@@ -42,6 +42,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build API image
-        run: docker build -f deploy/docker/Dockerfile.api -t datalus-api:ci .
+        run: docker build -f docker/Dockerfile.api -t datalus-api:ci .
       - name: Build Streamlit image
-        run: docker build -f deploy/docker/Dockerfile.streamlit -t datalus-streamlit:ci .
+        run: docker build -f docker/Dockerfile.streamlit -t datalus-streamlit:ci .

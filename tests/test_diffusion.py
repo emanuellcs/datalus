@@ -1,7 +1,9 @@
 import torch
 
-from datalus.diffusion import RePaintConfig, TabularDiffusion, make_repaint_schedule
-from datalus.nn import TabularDenoiserMLP
+from datalus.domain.diffusion_math import make_repaint_schedule
+from datalus.domain.schemas import RePaintConfig
+from datalus.infrastructure.torch_diffusion import TabularDiffusion
+from datalus.infrastructure.torch_nn import TabularDenoiserMLP
 
 
 def test_ddim_and_repaint_shapes_are_stable():

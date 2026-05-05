@@ -1,75 +1,37 @@
-"""Colab-safe training orchestration for DATALUS."""
+"""Training use case for DATALUS.
+
+The application layer coordinates the training workflow but delegates all
+framework-specific work to infrastructure adapters: Polars loaders, PyTorch
+modules, and checkpoint persistence.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import polars as pl
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
-from datalus.checkpointing import (
+from datalus.domain.schemas import TrainingConfig
+from datalus.infrastructure.checkpointing import (
     capture_rng_state,
     load_checkpoint,
     restore_rng_state,
     save_checkpoint,
     seed_everything,
 )
-from datalus.diffusion import TabularDiffusion
-from datalus.encoding import TabularEncoder
-from datalus.nn import EMA, FeatureProjector, TabularDenoiserMLP
+from datalus.infrastructure.encoding import TabularEncoder
+from datalus.infrastructure.polars_loader import ChunkedParquetBatches
+from datalus.infrastructure.torch_diffusion import TabularDiffusion
+from datalus.infrastructure.torch_nn import EMA, FeatureProjector, TabularDenoiserMLP
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass(slots=True)
-class TrainingConfig:
-    """Training parameters optimized for bounded Colab resources."""
-
-    schema_path: str
-    data_path: str
-    output_dir: str
-    batch_size: int = 2_048
-    epochs: int = 1
-    learning_rate: float = 2e-4
-    weight_decay: float = 1e-4
-    checkpoint_every_steps: int = 500
-    seed: int = 42
-    num_timesteps: int = 1_000
-    hidden_dims: tuple[int, ...] = (512, 1024, 1024, 512)
-    amp: bool = True
-    ema_decay: float = 0.9999
-    warmup_steps: int = 500
-    max_grad_norm: float = 1.0
-    max_encoder_fit_rows: int = 100_000
-
-
-class ChunkedParquetBatches:
-    """Read Parquet slices lazily enough to avoid full-data materialization."""
-
-    def __init__(self, path: str | Path, batch_size: int, seed: int) -> None:
-        self.path = str(path)
-        self.batch_size = batch_size
-        self.seed = seed
-        self.lazy_frame = pl.scan_parquet(self.path)
-        self.num_rows = int(self.lazy_frame.select(pl.len()).collect().item())
-
-    def offsets_for_epoch(self, epoch: int, shuffle: bool = True) -> list[int]:
-        offsets = list(range(0, self.num_rows, self.batch_size))
-        if shuffle:
-            rng = np.random.default_rng(self.seed + epoch)
-            offsets = [offsets[idx] for idx in rng.permutation(len(offsets))]
-        return offsets
-
-    def read_offset(self, offset: int) -> pl.DataFrame:
-        return self.lazy_frame.slice(offset, self.batch_size).collect()
 
 
 class DatalusTrainer:
@@ -222,8 +184,8 @@ class DatalusTrainer:
             "global_step": self.global_step,
             "loss": loss,
             "loss_history": self.loss_history,
-            "config": asdict(self.config),
-            "config_hash": _config_hash(asdict(self.config)),
+            "config": self.config.model_dump(mode="json"),
+            "config_hash": _config_hash(self.config.model_dump(mode="json")),
             "diffusion_state": self.diffusion.state_dict(),
             "projector_state": self.projector.state_dict(),
             "optimizer_state": self.optimizer.state_dict(),

@@ -2,7 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from datalus.api import create_app
+from datalus.interfaces.api import create_app
 
 
 def test_artifact_api_serves_manifest(tmp_path):

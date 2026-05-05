@@ -1,15 +1,22 @@
-"""Lazy zero-shot preprocessing and topology inference for DATALUS."""
+"""Polars-backed ingestion infrastructure.
+
+Note:
+    This adapter is the only layer that knows how to scan CSV, Parquet, and ORC
+    files with Polars. It emits pure domain `ColumnProfile` objects so upstream
+    application code is insulated from the dataframe engine.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 import polars as pl
+
+from datalus.domain.schemas import ColumnProfile
 
 logger = logging.getLogger(__name__)
 
@@ -17,24 +24,6 @@ IDENTIFIER_NAME_RE = re.compile(
     r"(^id$|_id$|cpf|cnpj|cns|cartao|prontuario|aih|nis|sus|uuid|guid|email|telefone|phone)",
     re.IGNORECASE,
 )
-
-
-@dataclass(slots=True)
-class ColumnProfile:
-    """Serializable metadata for one input column."""
-
-    column_name: str
-    original_dtype: str
-    inferred_topology: str
-    encoding_strategy: str
-    cardinality: int | None = None
-    null_ratio: float | None = None
-    is_target: bool = False
-    retained: bool = True
-    reason: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
 
 
 def _collect_streaming(lazy_frame: pl.LazyFrame) -> pl.DataFrame:

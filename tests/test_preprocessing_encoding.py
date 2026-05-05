@@ -3,8 +3,8 @@ import json
 import numpy as np
 import polars as pl
 
-from datalus.encoding import TabularEncoder
-from datalus.preprocessing import ZeroShotPreprocessor
+from datalus.infrastructure.encoding import TabularEncoder
+from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
 
 
 def test_lazy_preprocessing_and_reversible_encoding(tmp_path):

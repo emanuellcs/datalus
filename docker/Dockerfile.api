@@ -9,5 +9,4 @@ COPY datalus ./datalus
 RUN pip install .
 
 EXPOSE 8000
-CMD ["uvicorn", "datalus.api:app", "--host", "0.0.0.0", "--port", "8000"]
-
+CMD ["uvicorn", "datalus.interfaces.api:app", "--host", "0.0.0.0", "--port", "8000"]

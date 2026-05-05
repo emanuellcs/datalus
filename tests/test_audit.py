@@ -1,6 +1,7 @@
 import polars as pl
 
-from datalus.audit import PrivacyEvaluator, PrivacyThresholds
+from datalus.application.audit import PrivacyEvaluator
+from datalus.domain.schemas import PrivacyThresholds
 
 
 def test_privacy_audit_report_has_dcr_and_shadow_mia():

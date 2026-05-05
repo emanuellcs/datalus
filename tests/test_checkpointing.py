@@ -3,7 +3,11 @@ import random
 import numpy as np
 import torch
 
-from datalus.checkpointing import capture_rng_state, restore_rng_state, seed_everything
+from datalus.infrastructure.checkpointing import (
+    capture_rng_state,
+    restore_rng_state,
+    seed_everything,
+)
 
 
 def test_rng_state_roundtrip():

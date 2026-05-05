@@ -1,15 +1,25 @@
-"""Diffusion schedules, DDIM sampling, RePaint inpainting, and CFG utilities."""
+"""PyTorch diffusion infrastructure for DATALUS.
+
+The domain layer owns schedule policy and RePaint configuration. This module
+adapts those pure mathematical contracts to torch tensors and neural modules.
+"""
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
 from typing import Any
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+from datalus.domain.diffusion_math import (
+    cosine_beta_schedule,
+    linear_beta_schedule,
+    make_ddim_timesteps,
+    make_repaint_schedule,
+)
+from datalus.domain.schemas import RePaintConfig
 
 
 class VarianceSchedule(nn.Module):
@@ -21,9 +31,13 @@ class VarianceSchedule(nn.Module):
         super().__init__()
         self.num_timesteps = num_timesteps
         if schedule_type == "linear":
-            betas = torch.linspace(1e-4, 0.02, num_timesteps, dtype=torch.float32)
+            betas = torch.tensor(
+                linear_beta_schedule(num_timesteps), dtype=torch.float32
+            )
         elif schedule_type == "cosine":
-            betas = self._cosine_beta_schedule(num_timesteps)
+            betas = torch.tensor(
+                cosine_beta_schedule(num_timesteps), dtype=torch.float32
+            )
         else:
             raise ValueError(f"Unsupported schedule type: {schedule_type}")
         alphas = 1.0 - betas
@@ -37,15 +51,6 @@ class VarianceSchedule(nn.Module):
             torch.sqrt((1.0 - alphas_cumprod).clamp(min=1e-8)),
         )
 
-    @staticmethod
-    def _cosine_beta_schedule(timesteps: int, s: float = 0.008) -> Tensor:
-        steps = timesteps + 1
-        x = torch.linspace(0, timesteps, steps, dtype=torch.float32)
-        alpha_bar = torch.cos(((x / timesteps) + s) / (1 + s) * math.pi / 2) ** 2
-        alpha_bar = alpha_bar / alpha_bar[0]
-        betas = 1.0 - alpha_bar[1:] / alpha_bar[:-1]
-        return betas.clamp(1e-5, 0.999)
-
     def extract(self, values: Tensor, t: Tensor, x_shape: torch.Size) -> Tensor:
         out = values.gather(0, t.detach().cpu()).to(device=t.device)
         return out.reshape(t.shape[0], *((1,) * (len(x_shape) - 1)))
@@ -56,16 +61,6 @@ class VarianceSchedule(nn.Module):
         if timestep < 0:
             return torch.tensor(1.0, device=device, dtype=self.alphas_cumprod.dtype)
         return self.alphas_cumprod[timestep].to(device)
-
-
-@dataclass(slots=True)
-class RePaintConfig:
-    """Parameters for tabular RePaint resampling."""
-
-    num_inference_steps: int = 250
-    jump_length: int = 10
-    jump_n_sample: int = 10
-    eta: float = 0.0
 
 
 class TabularDiffusion(nn.Module):
@@ -305,43 +300,3 @@ class TabularDiffusion(nn.Module):
         return torch.sqrt(ratio) * sample + torch.sqrt(1.0 - ratio) * torch.randn_like(
             sample
         )
-
-
-def make_ddim_timesteps(num_train_timesteps: int, ddim_steps: int) -> list[int]:
-    """Return descending timestep subsequence for DDIM."""
-
-    steps = max(1, min(num_train_timesteps, int(ddim_steps)))
-    values = torch.linspace(0, num_train_timesteps - 1, steps).round().long().flip(0)
-    return [int(value) for value in values.unique_consecutive()]
-
-
-def make_repaint_schedule(
-    num_train_timesteps: int,
-    num_inference_steps: int,
-    jump_length: int,
-    jump_n_sample: int,
-) -> list[int]:
-    """Create the RePaint jump-back schedule scaled to training timesteps."""
-
-    num_inference_steps = max(1, min(num_train_timesteps, num_inference_steps))
-    jump_length = max(1, int(jump_length))
-    jump_n_sample = max(1, int(jump_n_sample))
-    jumps = {
-        j: jump_n_sample - 1
-        for j in range(0, max(num_inference_steps - jump_length, 0), jump_length)
-    }
-    sequence: list[int] = []
-    t = num_inference_steps
-    while t >= 1:
-        t -= 1
-        sequence.append(t)
-        if jumps.get(t, 0) > 0:
-            jumps[t] -= 1
-            for _ in range(jump_length):
-                t += 1
-                sequence.append(t)
-    scale = max(1, num_train_timesteps // num_inference_steps)
-    scaled = [min(num_train_timesteps - 1, value * scale) for value in sequence]
-    if scaled[-1] != -1:
-        scaled.append(-1)
-    return scaled
