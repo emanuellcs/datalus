@@ -137,3 +137,23 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+
+# DATALUS artifacts and data
+artifacts/
+outputs/
+checkpoints/
+data/raw/
+data/processed/
+*.parquet
+*.onnx
+*.pt
