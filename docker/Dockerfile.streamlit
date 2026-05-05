@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-COPY datalus ./datalus
+COPY src ./src
 COPY frontend ./frontend
 RUN pip install ".[frontend]"
 RUN cd frontend/component && (npm ci || npm install) && npm run build

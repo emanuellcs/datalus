@@ -45,9 +45,10 @@ dev = [
 datalus = "datalus.interfaces.cli:app"
 
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["datalus*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src"]
 addopts = "-q"

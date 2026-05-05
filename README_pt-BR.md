@@ -14,7 +14,7 @@
 - **Linha de Pesquisa:** Inteligência Artificial e Tecnologia
 - **Categoria:** Estudante do Ensino Superior
 - **Instituição:** Centro Universitário Internacional (UNINTER), Ciência da Computação
-- **Orientador:** *A ser definido*
+- **Orientador:** _A ser definido_
 
 ## Nota Introdutória
 
@@ -308,11 +308,11 @@ O setor público brasileiro opera com restrições consideráveis de infraestrut
 
 A estratégia de inferência em borda do DATALUS separa completamente o treinamento (GPU, nuvem) da inferência (CPU, servidor local). Após o treinamento, os pesos PyTorch são exportados para o formato **ONNX** (Open Neural Network Exchange, opset 17) e submetidos à **Quantização Pós-Treinamento (PTQ)**:
 
-| Formato | Redução de Memória | Aceleração de Inferência | Caso de Uso Recomendado |
-|---------|-------------------|--------------------------|------------------------|
+| Formato | Redução de Memória | Aceleração de Inferência | Caso de Uso Recomendado                                      |
+| ------- | ------------------ | ------------------------ | ------------------------------------------------------------ |
 | FP32    | Referência         | Referência               | Auditores que necessitam de reprodutibilidade numérica exata |
-| FP16    | 50%               | Similar ao FP32          | Servidores com suporte nativo a FP16 |
-| INT8    | 75%               | 2x a 4x                  | Servidores municipais com instruções AVX2 |
+| FP16    | 50%                | Similar ao FP32          | Servidores com suporte nativo a FP16                         |
+| INT8    | 75%                | 2x a 4x                  | Servidores municipais com instruções AVX2                    |
 
 A quantização dinâmica INT8 quantiza os pesos estaticamente na conversão e as ativações dinamicamente em tempo de execução, sem requerer dataset de calibração separado. Isto simplifica a atualização dos modelos quando novos dados de treinamento ficam disponíveis. A meta de performance da prova de conceito é: geração de 100.000 registros sintéticos com o artefato INT8 em CPU Intel Core i7 de décima geração (sem GPU) em menos de 60 segundos.
 
@@ -397,42 +397,42 @@ A linha de extensão de maior relevância científica é a **Differential Privac
 ## 14. Referências Científicas Fundamentais
 
 **Modelos de Difusão Probabilística:**
-Ho, J., Jain, A., e Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. *Advances in Neural Information Processing Systems*, 33, 6840-6851.
+Ho, J., Jain, A., e Abbeel, P. (2020). Denoising Diffusion Probabilistic Models. _Advances in Neural Information Processing Systems_, 33, 6840-6851.
 
-Song, J., Meng, C., e Ermon, S. (2020). Denoising Diffusion Implicit Models. *International Conference on Learning Representations (ICLR 2021)*.
+Song, J., Meng, C., e Ermon, S. (2020). Denoising Diffusion Implicit Models. _International Conference on Learning Representations (ICLR 2021)_.
 
-Ho, J., e Salimans, T. (2022). Classifier-Free Diffusion Guidance. *NeurIPS 2021 Workshop on Deep Generative Models and Downstream Applications*.
+Ho, J., e Salimans, T. (2022). Classifier-Free Diffusion Guidance. _NeurIPS 2021 Workshop on Deep Generative Models and Downstream Applications_.
 
-Austin, J., Johnson, D. D., Ho, J., Tarlow, D., e van den Berg, R. (2021). Structured Denoising Diffusion Models in Discrete State-Spaces. *Advances in Neural Information Processing Systems*, 34.
+Austin, J., Johnson, D. D., Ho, J., Tarlow, D., e van den Berg, R. (2021). Structured Denoising Diffusion Models in Discrete State-Spaces. _Advances in Neural Information Processing Systems_, 34.
 
 **Dados Sintéticos Tabulares:**
-Kotelnikov, A., Baranchuk, D., Rubachev, I., e Babenko, A. (2023). TabDDPM: Modelling Tabular Data with Diffusion Models. *International Conference on Machine Learning (ICML 2023)*.
+Kotelnikov, A., Baranchuk, D., Rubachev, I., e Babenko, A. (2023). TabDDPM: Modelling Tabular Data with Diffusion Models. _International Conference on Machine Learning (ICML 2023)_.
 
-Xu, L., Skoularidou, M., Cuesta-Infante, A., e Veeramachaneni, K. (2019). Modeling Tabular Data using Conditional GAN. *Advances in Neural Information Processing Systems*, 32.
+Xu, L., Skoularidou, M., Cuesta-Infante, A., e Veeramachaneni, K. (2019). Modeling Tabular Data using Conditional GAN. _Advances in Neural Information Processing Systems_, 32.
 
 **Privacidade e Segurança de Dados:**
-Narayanan, A., e Shmatikoff, V. (2008). Robust De-anonymization of Large Sparse Datasets. *IEEE Symposium on Security and Privacy*.
+Narayanan, A., e Shmatikoff, V. (2008). Robust De-anonymization of Large Sparse Datasets. _IEEE Symposium on Security and Privacy_.
 
-Lugmayr, A., Danelljan, M., Romero, A., Yu, F., Timofte, R., e Van Gool, L. (2022). RePaint: Inpainting using Denoising Diffusion Probabilistic Models. *IEEE/CVF CVPR 2022*.
+Lugmayr, A., Danelljan, M., Romero, A., Yu, F., Timofte, R., e Van Gool, L. (2022). RePaint: Inpainting using Denoising Diffusion Probabilistic Models. _IEEE/CVF CVPR 2022_.
 
-Abadi, M. et al. (2016). Deep Learning with Differential Privacy. *ACM CCS 2016*.
+Abadi, M. et al. (2016). Deep Learning with Differential Privacy. _ACM CCS 2016_.
 
 **Otimização e Hardware:**
-Loshchilov, I., e Hutter, F. (2019). Decoupled Weight Decay Regularization. *International Conference on Learning Representations (ICLR 2019)*.
+Loshchilov, I., e Hutter, F. (2019). Decoupled Weight Decay Regularization. _International Conference on Learning Representations (ICLR 2019)_.
 
 **Avaliação e Responsabilidade em IA:**
-Mitchell, M. et al. (2019). Model Cards for Model Reporting. *Proceedings of the Conference on Fairness, Accountability, and Transparency (ACM FAccT)*.
+Mitchell, M. et al. (2019). Model Cards for Model Reporting. _Proceedings of the Conference on Fairness, Accountability, and Transparency (ACM FAccT)_.
 
-Kendall, A., e Gal, Y. (2017). What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision? *Advances in Neural Information Processing Systems*, 30.
+Kendall, A., e Gal, Y. (2017). What Uncertainties Do We Need in Bayesian Deep Learning for Computer Vision? _Advances in Neural Information Processing Systems_, 30.
 
 **Gradient Boosting de Estado da Arte:**
-Prokhorenkova, L., Gusev, G., Vorobev, A., Dorogush, A. V., e Gulin, A. (2018). CatBoost: unbiased boosting with categorical features. *Advances in Neural Information Processing Systems*, 31.
+Prokhorenkova, L., Gusev, G., Vorobev, A., Dorogush, A. V., e Gulin, A. (2018). CatBoost: unbiased boosting with categorical features. _Advances in Neural Information Processing Systems_, 31.
 
-Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., e Liu, T. Y. (2017). LightGBM: A Highly Efficient Gradient Boosting Decision Tree. *Advances in Neural Information Processing Systems*, 30.
+Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., e Liu, T. Y. (2017). LightGBM: A Highly Efficient Gradient Boosting Decision Tree. _Advances in Neural Information Processing Systems_, 30.
 
 **Engenharia de Dados:**
-Vink, R. (2023). *Polars: The Definitive Guide*. O'Reilly Media.
+Vink, R. (2023). _Polars: The Definitive Guide_. O'Reilly Media.
 
-Apache Software Foundation. (2013). *Apache Parquet: Columnar Storage Format Specification*. The Apache Software Foundation.
+Apache Software Foundation. (2013). _Apache Parquet: Columnar Storage Format Specification_. The Apache Software Foundation.
 
-*Este documento foi preparado como parte da submissão oficial do projeto DATALUS ao 32º Prêmio Jovem Cientista (2026). Todos os componentes de software descritos serão disponibilizados publicamente sob licença Apache 2.0. Os artefatos de modelo e datasets sintéticos serão publicados no Hugging Face Hub e no Kaggle com documentação completa de replicação. Este documento não contém dados pessoais de cidadãos brasileiros. Os valores numéricos nos exemplos são fictícios e servem exclusivamente para fins ilustrativos.*
+_Este documento foi preparado como parte da submissão oficial do projeto DATALUS ao 32º Prêmio Jovem Cientista (2026). Todos os componentes de software descritos serão disponibilizados publicamente sob licença Apache 2.0. Os artefatos de modelo e datasets sintéticos serão publicados no Hugging Face Hub e no Kaggle com documentação completa de replicação. Este documento não contém dados pessoais de cidadãos brasileiros. Os valores numéricos nos exemplos são fictícios e servem exclusivamente para fins ilustrativos._

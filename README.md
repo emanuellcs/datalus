@@ -290,11 +290,11 @@ The MLP denoiser is exported via static graph tracing (`torch.onnx.export`, opse
 
 ### 7.3 Post-Training Quantization
 
-| Format | Memory Reduction | Inference Speedup | Recommended Use Case |
-|--------|-----------------|-------------------|----------------------|
-| FP32   | Baseline         | Baseline          | Auditors requiring exact numerical reproducibility |
-| FP16   | 50%             | Similar to FP32   | Servers with native FP16 CPU support |
-| INT8   | 75%             | 2x to 4x          | Municipal servers with AVX2 instructions (Intel Haswell+, AMD Zen 2+) |
+| Format | Memory Reduction | Inference Speedup | Recommended Use Case                                                  |
+| ------ | ---------------- | ----------------- | --------------------------------------------------------------------- |
+| FP32   | Baseline         | Baseline          | Auditors requiring exact numerical reproducibility                    |
+| FP16   | 50%              | Similar to FP32   | Servers with native FP16 CPU support                                  |
+| INT8   | 75%              | 2x to 4x          | Municipal servers with AVX2 instructions (Intel Haswell+, AMD Zen 2+) |
 
 ```python
 import onnxruntime as ort
