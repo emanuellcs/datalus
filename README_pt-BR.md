@@ -133,7 +133,7 @@ $$
 O beta de cada passo é:
 
 $$
-\beta_t=\operatorname{clip}\left(1-\frac{\bar{\alpha}_{t+1}}{\bar{\alpha}_t},10^{-5},0.999\right)
+\beta_t=\text{clip}\left(1-\frac{\bar{\alpha}_{t+1}}{\bar{\alpha}_t},10^{-5},0.999\right)
 $$
 
 `VarianceSchedule` converte esses valores em tensores para $\beta_t$, $\alpha_t=1-\beta_t$, $\bar{\alpha}_t$, $\sqrt{\bar{\alpha}_t}$ e $\sqrt{1-\bar{\alpha}_t}$. Há também cronograma linear para ablação e testes.
@@ -265,7 +265,7 @@ $$
 O limiar de alerta é o percentil configurado da distância ao segundo vizinho real mais próximo:
 
 $$
-\tau_{\mathrm{DCR}}=\operatorname{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{treino}})\right\}_{j=1}^{N}\right)
+\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{treino}})\right\}_{j=1}^{N}\right)
 $$
 
 A razão memorística é:
@@ -281,7 +281,7 @@ A aprovação padrão exige $\rho_{\mathrm{mem}}<0.01$ com percentil DCR $p=1.0$
 O ataque de inferência de pertencimento estima se um registro real participou do treinamento. O DATALUS constrói atributos de ataque por vizinhança entre candidatos e dados gerados:
 
 $$
-\phi(\mathbf{x})=\left[d_{\min}(\mathbf{x},S),\overline{d}_k(\mathbf{x},S),\operatorname{std}_k(\mathbf{x},S),\frac{d_{\min}(\mathbf{x},S)}{\max(\overline{d}_k(\mathbf{x},S),10^{-8})}\right]
+\phi(\mathbf{x})=\left[d_{\min}(\mathbf{x},S),\overline{d}_k(\mathbf{x},S),\text{std}_k(\mathbf{x},S),\frac{d_{\min}(\mathbf{x},S)}{\max(\overline{d}_k(\mathbf{x},S),10^{-8})}\right]
 $$
 
 Um RandomForest aprende escores de pertencimento. O indicador central é:
@@ -505,7 +505,7 @@ Ajuste de batch:
 | OOM com muitas categorias de alta cardinalidade | Reduzir para `256` ou revisar colunas retidas. |
 | Interrupção de sessão | Retomar pelo checkpoint salvo no Drive. |
 
-## Detalhes de Inferência e Arquitetura Do Modelo
+## Detalhes de Inferência e Arquitetura do Modelo
 
 ### Transformações Numéricas por Quantis
 

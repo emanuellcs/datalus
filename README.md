@@ -147,7 +147,7 @@ $$
 The beta schedule is:
 
 $$
-\beta_t=\operatorname{clip}\left(1-\frac{\bar{\alpha}_{t+1}}{\bar{\alpha}_t},10^{-5},0.999\right)
+\beta_t=\text{clip}\left(1-\frac{\bar{\alpha}_{t+1}}{\bar{\alpha}_t},10^{-5},0.999\right)
 $$
 
 `VarianceSchedule` converts these values into tensors for $\beta_t$, $\alpha_t=1-\beta_t$, $\bar{\alpha}_t$, $\sqrt{\bar{\alpha}_t}$, and $\sqrt{1-\bar{\alpha}_t}$. A linear beta schedule also exists for ablation and tests.
@@ -281,7 +281,7 @@ $$
 The alert threshold is the configured percentile of each real record's second-nearest real neighbor distance:
 
 $$
-\tau_{\mathrm{DCR}}=\operatorname{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{train}})\right\}_{j=1}^{N}\right)
+\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{train}})\right\}_{j=1}^{N}\right)
 $$
 
 The memorization ratio is:
@@ -297,7 +297,7 @@ The default approval rule is $\rho_{\mathrm{mem}}<0.01$ with the DCR threshold p
 Following the Shokri threat model, the attacker learns features that distinguish records used to train a generator from non-member records. DATALUS computes nearest-neighbor attack features for candidate records against generated records:
 
 $$
-\phi(\mathbf{x})=\left[d_{\min}(\mathbf{x},S),\overline{d}_k(\mathbf{x},S),\operatorname{std}_k(\mathbf{x},S),\frac{d_{\min}(\mathbf{x},S)}{\max(\overline{d}_k(\mathbf{x},S),10^{-8})}\right]
+\phi(\mathbf{x})=\left[d_{\min}(\mathbf{x},S),\overline{d}_k(\mathbf{x},S),\text{std}_k(\mathbf{x},S),\frac{d_{\min}(\mathbf{x},S)}{\max(\overline{d}_k(\mathbf{x},S),10^{-8})}\right]
 $$
 
 A RandomForest attack model estimates membership scores. The central metric is attack ROC-AUC:
