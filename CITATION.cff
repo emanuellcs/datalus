@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use DATALUS in academic work, public-sector analysis, or software artifacts, please cite it using the metadata in this file."
+type: software
+title: "DATALUS: Diffusion-Augmented Tabular Architecture for Local Utility and Security"
+authors:
+  - family-names: "Silva"
+    given-names: "Emanuel Lázaro Custódio"
+year: 2026
+license: "Apache-2.0"
+repository-code: "https://github.com/emanuellcs/datalus"
+url: "https://github.com/emanuellcs/datalus"

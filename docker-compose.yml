@@ -1,0 +1,25 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    environment:
+      DATALUS_REGISTRY_PATH: /app/artifacts
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    ports:
+      - "8000:8000"
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.streamlit
+    environment:
+      DATALUS_REGISTRY_PATH: /app/artifacts
+      DATALUS_ARTIFACT_BASE_URL: http://localhost:8000/artifacts
+    volumes:
+      - ./artifacts:/app/artifacts:ro
+    ports:
+      - "8501:8501"
+    depends_on:
+      - api

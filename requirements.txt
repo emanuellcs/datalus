@@ -1,0 +1,3 @@
+# Generated from pyproject.toml.
+# Keep this file as a compatibility shim only; do not add direct dependencies here.
+-e .[dev]
