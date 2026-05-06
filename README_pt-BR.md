@@ -265,7 +265,7 @@ $$
 O limiar de alerta é o percentil configurado da distância ao segundo vizinho real mais próximo:
 
 $$
-\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{treino}})\right\}_{j=1}^{N}\right)
+\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{treino}})\}_{j=1}^{N}\right)
 $$
 
 A razão memorística é:
