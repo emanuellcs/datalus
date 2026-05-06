@@ -48,6 +48,7 @@ def export_denoiser_onnx(
             "predicted_noise": {0: "batch_size"},
         },
         opset_version=opset_version,
+        dynamo=False,
     )
     return output
 
@@ -90,6 +91,59 @@ def validate_onnx_parity(
         "passed": bool(np.allclose(torch_out, ort_out, atol=atol, rtol=rtol)),
         "atol": atol,
         "rtol": rtol,
+    }
+
+
+def validate_int8_cfg_parity(
+    fp32_path: str | Path,
+    int8_path: str | Path,
+    latent_dim: int,
+    cfg_scale: float = 3.0,
+    atol: float = 2e-1,
+    categorical_slices: list[tuple[int, int]] | None = None,
+) -> dict[str, Any]:
+    """Bound quantization drift after high-scale CFG noise amplification."""
+
+    import onnxruntime as ort
+
+    rng = np.random.default_rng(42)
+    x = rng.normal(size=(8, latent_dim)).astype(np.float32)
+    t = rng.integers(0, 1_000, size=(8,), dtype=np.int64)
+    fp32_session = ort.InferenceSession(
+        str(fp32_path), providers=["CPUExecutionProvider"]
+    )
+    int8_session = ort.InferenceSession(
+        str(int8_path), providers=["CPUExecutionProvider"]
+    )
+    feeds = {
+        fp32_session.get_inputs()[0].name: x,
+        fp32_session.get_inputs()[1].name: t,
+    }
+    fp32 = fp32_session.run(None, feeds)[0]
+    feeds_int8 = {
+        int8_session.get_inputs()[0].name: x,
+        int8_session.get_inputs()[1].name: t,
+    }
+    int8 = int8_session.run(None, feeds_int8)[0]
+
+    # CFG computes eps_uncond + w * (eps_cond - eps_uncond). Export artifacts may
+    # not include a context input, so the parity guard measures the worst-case
+    # amplification of raw epsilon drift under the same guidance scale.
+    amplified_abs = float(np.max(np.abs((fp32 - int8) * cfg_scale)))
+    categorical_agreement: float | None = None
+    if categorical_slices:
+        agreements: list[float] = []
+        for start, stop in categorical_slices:
+            fp32_idx = np.argmax(fp32[:, start:stop], axis=1)
+            int8_idx = np.argmax(int8[:, start:stop], axis=1)
+            agreements.append(float(np.mean(fp32_idx == int8_idx)))
+        categorical_agreement = float(np.mean(agreements)) if agreements else None
+    return {
+        "cfg_scale": cfg_scale,
+        "amplified_max_abs_diff": amplified_abs,
+        "categorical_agreement": categorical_agreement,
+        "passed": bool(amplified_abs <= atol),
+        "atol": atol,
     }
 
 

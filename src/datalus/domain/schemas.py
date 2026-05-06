@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -27,6 +27,10 @@ class ColumnProfile(DomainModel):
     encoding_strategy: str
     cardinality: int | None = None
     null_ratio: float | None = None
+    category_frequencies: dict[str, int] | None = None
+    rare_category_count: int | None = None
+    rare_category_threshold: int | None = None
+    rare_categories_preserved: bool = True
     is_target: bool = False
     retained: bool = True
     reason: str | None = None
@@ -52,11 +56,43 @@ class PrivacyThresholds(DomainModel):
 class ShadowMIAConfig(DomainModel):
     """Domain parameters for the black-box shadow-model MIA protocol."""
 
+    mode: Literal["release", "ci_lite"] = "release"
     n_shadow_models: int = Field(default=4, ge=1)
     shadow_train_fraction: float = Field(default=0.5, gt=0.0, lt=1.0)
     synthetic_multiplier: float = Field(default=1.0, gt=0.0)
     n_neighbors: int = Field(default=5, ge=1)
+    max_rows: int | None = Field(default=None, ge=8)
+    attack_estimators: int = Field(default=200, ge=10)
+    attack_max_depth: int | None = Field(default=8, ge=1)
+    attack_min_samples_leaf: int = Field(default=3, ge=1)
     random_state: int = 42
+
+
+class GenerationConfig(DomainModel):
+    """User-facing generation policy shared by CLI and HTTP interfaces."""
+
+    mode: Literal[
+        "ab_initio",
+        "augmentation",
+        "balancing",
+        "inpainting",
+        "counterfactual",
+    ] = "ab_initio"
+    n_records: int = Field(default=100, ge=1)
+    ddim_steps: int = Field(default=50, ge=1)
+    seed: int = 42
+    cfg_scale: float = Field(default=1.0, ge=0.0)
+    conditions: dict[str, Any] = Field(default_factory=dict)
+
+
+class BalancingConfig(GenerationConfig):
+    """Policy for selective synthetic generation of underrepresented classes."""
+
+    mode: Literal["balancing"] = "balancing"
+    target_column: str
+    target_distribution: dict[str, int] = Field(default_factory=dict)
+    max_attempts: int = Field(default=10, ge=1)
+    strict: bool = False
 
 
 class TrainingConfig(DomainModel):
@@ -74,6 +110,7 @@ class TrainingConfig(DomainModel):
     num_timesteps: int = Field(default=1_000, ge=1)
     hidden_dims: tuple[int, ...] = (512, 1024, 1024, 512)
     amp: bool = True
+    condition_dropout: float = Field(default=0.1, ge=0.0, le=1.0)
     ema_decay: float = Field(default=0.9999, gt=0.0, lt=1.0)
     warmup_steps: int = Field(default=500, ge=0)
     max_grad_norm: float = Field(default=1.0, gt=0.0)

@@ -19,6 +19,7 @@ from datalus.infrastructure.encoding import TabularEncoder
 from datalus.infrastructure.onnx_export import (
     export_denoiser_onnx,
     quantize_int8,
+    validate_int8_cfg_parity,
     validate_onnx_parity,
     write_manifest,
 )
@@ -32,8 +33,9 @@ def sample_records(
     n_records: int,
     ddim_steps: int,
     seed: int,
+    cfg_scale: float = 1.0,
 ) -> pl.DataFrame:
-    """Generate synthetic records from a trained checkpoint."""
+    """Generate ab-initio synthetic records from a trained checkpoint."""
 
     diffusion, projector, encoder, device = load_model_bundle(
         checkpoint_path, encoder_path
@@ -43,8 +45,88 @@ def sample_records(
         device=device,
         ddim_steps=ddim_steps,
         seed=seed,
+        cfg_scale=cfg_scale,
     )
     return decode_latent(latent, projector, encoder)
+
+
+def augment_records(
+    checkpoint_path: Path,
+    encoder_path: Path,
+    input_path: Path,
+    n_records: int,
+    ddim_steps: int,
+    seed: int,
+    cfg_scale: float = 1.0,
+) -> pl.DataFrame:
+    """Append ab-initio synthetic rows to an existing tabular dataset."""
+
+    original = pl.read_parquet(input_path)
+    synthetic = sample_records(
+        checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
+    )
+    return pl.concat(
+        [original, synthetic.select(original.columns)], how="vertical_relaxed"
+    )
+
+
+def balance_records(
+    checkpoint_path: Path,
+    encoder_path: Path,
+    input_path: Path,
+    target_column: str,
+    target_distribution: dict[str, int],
+    ddim_steps: int,
+    seed: int,
+    cfg_scale: float = 1.0,
+    max_attempts: int = 10,
+    strict: bool = False,
+) -> pl.DataFrame:
+    """Generate rows until requested target-class counts are reached."""
+
+    original = pl.read_parquet(input_path)
+    if target_column not in original.columns:
+        raise ValueError(f"Target column '{target_column}' is not present.")
+    current_counts = {
+        str(row[target_column]): int(row["len"])
+        for row in original.group_by(target_column).len().iter_rows(named=True)
+    }
+    needed = {
+        str(label): max(0, int(target) - current_counts.get(str(label), 0))
+        for label, target in target_distribution.items()
+    }
+    remaining = sum(needed.values())
+    generated_parts: list[pl.DataFrame] = []
+    attempt = 0
+    while remaining > 0 and attempt < max_attempts:
+        attempt += 1
+        candidate = sample_records(
+            checkpoint_path,
+            encoder_path,
+            max(remaining * 2, 1),
+            ddim_steps,
+            seed + attempt,
+            cfg_scale,
+        )
+        for label, count in list(needed.items()):
+            if count <= 0 or target_column not in candidate.columns:
+                continue
+            matched = candidate.filter(pl.col(target_column).cast(pl.String) == label)
+            take = matched.head(count)
+            if len(take):
+                generated_parts.append(take)
+                needed[label] -= len(take)
+        remaining = sum(needed.values())
+    if strict and remaining > 0:
+        raise RuntimeError(
+            "Unable to satisfy the requested target distribution within max_attempts."
+        )
+    if not generated_parts:
+        return original
+    generated = pl.concat(generated_parts, how="vertical_relaxed")
+    return pl.concat(
+        [original, generated.select(original.columns)], how="vertical_relaxed"
+    )
 
 
 def inpaint_records(
@@ -149,16 +231,25 @@ def export_onnx_artifacts(
     )
     parity = validate_onnx_parity(diffusion.denoiser, fp32, projector.total_latent_dim)
     artifacts = {"model_fp32": fp32.name}
+    int8_parity = None
     if quantize:
         int8 = quantize_int8(fp32, output_dir / "model_int8.onnx")
         artifacts["model_int8"] = int8.name
+        int8_parity = validate_int8_cfg_parity(
+            fp32,
+            int8,
+            projector.total_latent_dim,
+            cfg_scale=3.0,
+        )
     encoder.save(output_dir / "encoder_config.json")
+    write_manifest(output_dir / "projector_config.json", projector.to_browser_config())
     write_manifest(
         output_dir / "manifest.json",
         {
             "latent_dim": projector.total_latent_dim,
             "artifacts": artifacts,
             "onnx_parity": parity,
+            "int8_cfg_parity": int8_parity,
         },
     )
 

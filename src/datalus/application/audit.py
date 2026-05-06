@@ -17,7 +17,7 @@ import polars as pl
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, train_test_split
 from sklearn.neighbors import NearestNeighbors
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -124,19 +124,34 @@ class PrivacyEvaluator:
     ) -> dict[str, Any]:
         """Run a Shokri-style shadow attack adapted to generated samples."""
 
-        cfg = config or ShadowMIAConfig()
+        cfg = _effective_shadow_config(config or ShadowMIAConfig())
         threshold_cfg = thresholds or PrivacyThresholds()
         rng = np.random.default_rng(cfg.random_state)
         shadow_features: list[np.ndarray] = []
         shadow_labels: list[np.ndarray] = []
-        real_pd = self.real_train.to_pandas()
-        for idx in range(cfg.n_shadow_models):
-            member_idx, nonmember_idx = train_test_split(
-                np.arange(len(real_pd)),
-                train_size=cfg.shadow_train_fraction,
-                random_state=cfg.random_state + idx,
-                shuffle=True,
+        real_source = _bounded_frame(self.real_train, cfg.max_rows, cfg.random_state)
+        real_pd = real_source.to_pandas()
+        folds = (
+            list(
+                KFold(
+                    n_splits=min(cfg.n_shadow_models + 1, len(real_pd)),
+                    shuffle=True,
+                    random_state=cfg.random_state,
+                ).split(np.arange(len(real_pd)))
             )
+            if cfg.mode == "ci_lite" and len(real_pd) >= 2
+            else []
+        )
+        for idx in range(cfg.n_shadow_models):
+            if folds:
+                member_idx, nonmember_idx = folds[idx % len(folds)]
+            else:
+                member_idx, nonmember_idx = train_test_split(
+                    np.arange(len(real_pd)),
+                    train_size=cfg.shadow_train_fraction,
+                    random_state=cfg.random_state + idx,
+                    shuffle=True,
+                )
             members = pl.from_pandas(real_pd.iloc[member_idx].reset_index(drop=True))
             nonmembers = pl.from_pandas(
                 real_pd.iloc[nonmember_idx].reset_index(drop=True)
@@ -155,9 +170,9 @@ class PrivacyEvaluator:
         x_attack = np.vstack(shadow_features)
         y_attack = np.concatenate(shadow_labels)
         attack_model = RandomForestClassifier(
-            n_estimators=200,
-            max_depth=8,
-            min_samples_leaf=3,
+            n_estimators=cfg.attack_estimators,
+            max_depth=cfg.attack_max_depth,
+            min_samples_leaf=cfg.attack_min_samples_leaf,
             n_jobs=-1,
             random_state=cfg.random_state,
         )
@@ -165,13 +180,13 @@ class PrivacyEvaluator:
 
         if self.real_holdout is None:
             member_idx, nonmember_idx = train_test_split(
-                np.arange(len(self.real_train)),
+                np.arange(len(real_source)),
                 train_size=0.5,
                 random_state=cfg.random_state + 10_000,
                 shuffle=True,
             )
-            target_members = self.real_train[member_idx]
-            target_nonmembers = self.real_train[nonmember_idx]
+            target_members = real_source[member_idx]
+            target_nonmembers = real_source[nonmember_idx]
         else:
             target_members = self.real_train
             target_nonmembers = self.real_holdout
@@ -192,6 +207,7 @@ class PrivacyEvaluator:
                 "APPROVED" if auc < threshold_cfg.mia_roc_auc else "REJECTED"
             ),
             "shadow_models": cfg.n_shadow_models,
+            "mia_mode": cfg.mode,
         }
 
     def _attack_features(
@@ -224,10 +240,11 @@ class PrivacyEvaluator:
             Callable[[pl.DataFrame, int, int], pl.DataFrame] | None
         ) = None,
         thresholds: PrivacyThresholds | None = None,
+        config: ShadowMIAConfig | None = None,
     ) -> dict[str, Any]:
         dcr = self.compute_dcr(thresholds)
         mia = self.shadow_membership_inference(
-            synthetic_provider, thresholds=thresholds
+            synthetic_provider, config=config, thresholds=thresholds
         )
         approved = (
             dcr["privacy_verdict_dcr"] == "APPROVED"
@@ -382,6 +399,37 @@ def _bootstrap_shadow_generator(
         else:
             mutated[column] = series.to_list()
     return pl.DataFrame(mutated)
+
+
+def _effective_shadow_config(config: ShadowMIAConfig) -> ShadowMIAConfig:
+    """Apply deterministic runtime caps for CI without changing release audits."""
+
+    if config.mode != "ci_lite":
+        return config
+    return config.model_copy(
+        update={
+            "n_shadow_models": min(config.n_shadow_models, 2),
+            "synthetic_multiplier": min(config.synthetic_multiplier, 0.5),
+            "n_neighbors": min(config.n_neighbors, 3),
+            "max_rows": config.max_rows or 512,
+            "attack_estimators": min(config.attack_estimators, 50),
+            "attack_max_depth": min(config.attack_max_depth or 6, 6),
+            "attack_min_samples_leaf": max(config.attack_min_samples_leaf, 2),
+        }
+    )
+
+
+def _bounded_frame(
+    frame: pl.DataFrame, max_rows: int | None, random_state: int
+) -> pl.DataFrame:
+    """Return a deterministic bounded audit sample for inexpensive CI checks."""
+
+    if max_rows is None or len(frame) <= max_rows:
+        return frame
+    indices = np.random.default_rng(random_state).choice(
+        len(frame), size=max_rows, replace=False
+    )
+    return frame[indices]
 
 
 def safe_ratio(numerator: float, denominator: float) -> float:

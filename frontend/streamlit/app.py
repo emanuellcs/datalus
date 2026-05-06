@@ -43,9 +43,21 @@ guidance_scale = st.sidebar.slider(
 )
 
 schema_path = LOCAL_REGISTRY / domain / "schema_config.json"
+encoder_path = LOCAL_REGISTRY / domain / "encoder_config.json"
+projector_path = LOCAL_REGISTRY / domain / "projector_config.json"
+manifest_path = LOCAL_REGISTRY / domain / "manifest.json"
 schema = {}
+encoder = {}
+projector = {}
+manifest = {}
 if schema_path.exists():
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
+if encoder_path.exists():
+    encoder = json.loads(encoder_path.read_text(encoding="utf-8"))
+if projector_path.exists():
+    projector = json.loads(projector_path.read_text(encoding="utf-8"))
+if manifest_path.exists():
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
 st.subheader("Inferência no navegador")
 st.write(
@@ -57,6 +69,9 @@ if st.button("Gerar dados sintéticos", type="primary"):
     result = run_browser_inference(
         artifact_base_url=artifact_base,
         schema=schema,
+        encoder=encoder,
+        projector=projector,
+        manifest=manifest,
         n_records=int(n_records),
         ddim_steps=int(ddim_steps),
         seed=int(seed),

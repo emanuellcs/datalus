@@ -147,6 +147,27 @@ class FeatureProjector(nn.Module):
             self.embeddings.append(layer)
         self.total_latent_dim = self.num_dim + sum(dim for _, dim in self.cat_dims)
 
+    def to_browser_config(self) -> dict[str, Any]:
+        """Serialize the latent layout and embeddings needed by ONNX Runtime Web."""
+
+        # The browser executes only the denoiser ONNX graph. Decoding categorical
+        # slices therefore requires the learned embedding table from this
+        # projector so the TypeScript component can run the same nearest-embedding
+        # reconstruction used by Python inference.
+        return {
+            "numerical_columns": self.numerical_columns,
+            "categorical_columns": self.categorical_columns,
+            "cat_dims": [
+                {"cardinality": cardinality, "embedding_dim": embedding_dim}
+                for cardinality, embedding_dim in self.cat_dims
+            ],
+            "latent_dim": self.total_latent_dim,
+            "embeddings": [
+                embedding.weight.detach().cpu().float().tolist()
+                for embedding in self.embeddings
+            ],
+        }
+
     def forward(self, x_num: Tensor | None, x_cat: Tensor | None) -> Tensor:
         parts: list[Tensor] = []
         if self.num_dim:

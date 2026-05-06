@@ -20,13 +20,15 @@ from datalus.application.audit import (
     write_audit_report,
 )
 from datalus.application.inference import (
+    augment_records,
+    balance_records,
     counterfactual_records,
     export_onnx_artifacts,
     inpaint_records,
     sample_records,
 )
 from datalus.application.training import DatalusTrainer
-from datalus.domain.schemas import TrainingConfig
+from datalus.domain.schemas import ShadowMIAConfig, TrainingConfig
 from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
 
 app = typer.Typer(help="DATALUS synthetic tabular data framework.")
@@ -82,13 +84,76 @@ def sample(
     n_records: int = 100,
     ddim_steps: int = 50,
     seed: int = 42,
+    cfg_scale: float = 1.0,
 ) -> None:
-    """Generate synthetic records from a trained checkpoint."""
+    """Generate a new synthetic dataset from learned distributions."""
 
-    frame = sample_records(checkpoint_path, encoder_path, n_records, ddim_steps, seed)
+    frame = sample_records(
+        checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(output_path, compression="snappy")
     typer.echo(f"Synthetic records written to {output_path}")
+
+
+@app.command("augment")
+def augment(
+    checkpoint_path: Path,
+    encoder_path: Path,
+    input_path: Path,
+    output_path: Path,
+    n_records: int = 100,
+    ddim_steps: int = 50,
+    seed: int = 42,
+    cfg_scale: float = 1.0,
+) -> None:
+    """Append synthetic records to scale up a small dataset."""
+
+    frame = augment_records(
+        checkpoint_path,
+        encoder_path,
+        input_path,
+        n_records,
+        ddim_steps,
+        seed,
+        cfg_scale,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.write_parquet(output_path, compression="snappy")
+    typer.echo(f"Augmented dataset written to {output_path}")
+
+
+@app.command("balance")
+def balance(
+    checkpoint_path: Path,
+    encoder_path: Path,
+    input_path: Path,
+    output_path: Path,
+    target_column: str,
+    target_distribution_json: str,
+    ddim_steps: int = 50,
+    seed: int = 42,
+    cfg_scale: float = 1.0,
+    max_attempts: int = 10,
+    strict: bool = False,
+) -> None:
+    """Generate records to approach a requested class distribution."""
+
+    frame = balance_records(
+        checkpoint_path,
+        encoder_path,
+        input_path,
+        target_column,
+        json.loads(target_distribution_json),
+        ddim_steps,
+        seed,
+        cfg_scale,
+        max_attempts,
+        strict,
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frame.write_parquet(output_path, compression="snappy")
+    typer.echo(f"Balanced dataset written to {output_path}")
 
 
 @app.command("inpaint")
@@ -164,6 +229,8 @@ def audit(
     report_path: Path,
     target_column: Optional[str] = None,
     real_holdout_path: Optional[Path] = None,
+    mia_mode: str = "release",
+    max_audit_rows: Optional[int] = None,
 ) -> None:
     """Run privacy and optional utility audits."""
 
@@ -171,7 +238,9 @@ def audit(
     real_train = pl.read_parquet(real_train_path)
     synthetic = pl.read_parquet(synthetic_path)
     real_holdout = pl.read_parquet(real_holdout_path) if real_holdout_path else None
-    report = PrivacyEvaluator(real_train, synthetic, schema, real_holdout).run_audit()
+    report = PrivacyEvaluator(real_train, synthetic, schema, real_holdout).run_audit(
+        config=ShadowMIAConfig(mode=mia_mode, max_rows=max_audit_rows)
+    )
     if (
         target_column is not None
         and target_column in real_train.columns

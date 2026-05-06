@@ -19,6 +19,9 @@ datalus_browser_inference = components.declare_component(
 def run_browser_inference(
     artifact_base_url: str,
     schema: dict[str, Any],
+    encoder: dict[str, Any],
+    projector: dict[str, Any],
+    manifest: dict[str, Any],
     n_records: int,
     ddim_steps: int,
     seed: int,
@@ -30,6 +33,9 @@ def run_browser_inference(
     return datalus_browser_inference(
         artifactBaseUrl=artifact_base_url,
         schema=schema,
+        encoder=encoder,
+        projector=projector,
+        manifest=manifest,
         nRecords=n_records,
         ddimSteps=ddim_steps,
         seed=seed,

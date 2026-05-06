@@ -6,11 +6,38 @@ import * as ort from "onnxruntime-web";
 type ComponentArgs = {
   artifactBaseUrl: string;
   schema: Record<string, unknown>;
+  encoder: EncoderConfig;
+  projector: ProjectorConfig;
+  manifest: Record<string, unknown>;
   nRecords: number;
   ddimSteps: number;
   seed: number;
   guidanceScale: number;
   conditions: Record<string, unknown>;
+};
+
+type NumericTransform = {
+  quantiles: number[];
+  references: number[];
+};
+
+type CategoryVocab = {
+  categories: string[];
+  null_token?: string;
+  unknown_token?: string;
+};
+
+type EncoderConfig = {
+  numeric_transforms?: Record<string, NumericTransform>;
+  categorical_vocabs?: Record<string, CategoryVocab>;
+};
+
+type ProjectorConfig = {
+  numerical_columns?: string[];
+  categorical_columns?: string[];
+  latent_dim?: number;
+  cat_dims?: Array<{ cardinality: number; embedding_dim: number }>;
+  embeddings?: number[][][];
 };
 
 function seededRandom(seed: number): () => number {
@@ -63,7 +90,9 @@ async function runDdim(
   });
   const input = session.inputNames[0];
   const timestep = session.inputNames[1];
-  const latentDim = Number((args.schema as any)?.latent_dim ?? 16);
+  const latentDim = Number(
+    args.projector?.latent_dim ?? (args.manifest as any)?.latent_dim ?? 16,
+  );
   const random = seededRandom(args.seed);
   const total = args.nRecords * latentDim;
   let x = new Float32Array(total);
@@ -95,16 +124,83 @@ async function runDdim(
     }
     x = next;
   }
-  const columns = Object.keys(args.schema || {});
-  return Array.from({ length: args.nRecords }, (_, row) => {
+  return decodeLatents(x, latentDim, args);
+}
+
+function interpolate(value: number, xs: number[], ys: number[]): number {
+  if (!xs.length || !ys.length) return value;
+  if (value <= xs[0]) return ys[0];
+  if (value >= xs[xs.length - 1]) return ys[ys.length - 1];
+  for (let i = 1; i < xs.length; i += 1) {
+    if (value <= xs[i]) {
+      const leftX = xs[i - 1];
+      const rightX = xs[i];
+      const weight = (value - leftX) / Math.max(rightX - leftX, 1e-12);
+      return ys[i - 1] + weight * (ys[i] - ys[i - 1]);
+    }
+  }
+  return ys[ys.length - 1];
+}
+
+function nearestCategory(
+  chunk: Float32Array,
+  weights: number[][],
+  vocab?: CategoryVocab,
+): string | null {
+  let best = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  weights.forEach((weight, idx) => {
+    let distance = 0;
+    for (let i = 0; i < chunk.length; i += 1) {
+      const delta = chunk[i] - Number(weight[i] ?? 0);
+      distance += delta * delta;
+    }
+    if (distance < bestDistance) {
+      best = idx;
+      bestDistance = distance;
+    }
+  });
+  const unknown = vocab?.unknown_token ?? "__UNKNOWN__";
+  const nullToken = vocab?.null_token ?? "__NULL__";
+  const tokens = [unknown, nullToken, ...(vocab?.categories ?? [])];
+  const token = tokens[best] ?? unknown;
+  return token === nullToken ? null : token;
+}
+
+function decodeLatents(
+  latents: Float32Array,
+  latentDim: number,
+  args: ComponentArgs,
+): Record<string, unknown>[] {
+  const numericColumns = args.projector?.numerical_columns ?? [];
+  const categoricalColumns = args.projector?.categorical_columns ?? [];
+  const records: Record<string, unknown>[] = [];
+  for (let row = 0; row < args.nRecords; row += 1) {
     const record: Record<string, unknown> = {};
-    columns.forEach((column, idx) => {
-      record[column] = Number(
-        x[row * latentDim + (idx % latentDim)].toFixed(6),
+    let cursor = 0;
+    numericColumns.forEach((column) => {
+      const transform = args.encoder?.numeric_transforms?.[column];
+      const encoded = latents[row * latentDim + cursor];
+      cursor += 1;
+      const unit = Math.min(1, Math.max(0, (encoded + 1) / 2));
+      record[column] = transform
+        ? interpolate(unit, transform.references, transform.quantiles)
+        : Number(encoded.toFixed(6));
+    });
+    categoricalColumns.forEach((column, idx) => {
+      const dim = Number(args.projector?.cat_dims?.[idx]?.embedding_dim ?? 1);
+      const start = row * latentDim + cursor;
+      const chunk = latents.slice(start, start + dim);
+      cursor += dim;
+      record[column] = nearestCategory(
+        chunk,
+        args.projector?.embeddings?.[idx] ?? [],
+        args.encoder?.categorical_vocabs?.[column],
       );
     });
-    return record;
-  });
+    records.push(record);
+  }
+  return records;
 }
 
 function Component(props: { args: ComponentArgs }): JSX.Element {

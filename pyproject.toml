@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datalus"
-version = "0.1.0"
-description = "Diffusion Augmented Tabular Architecture for Local Utility and Security"
+version = "1.0.0"
+description = "Diffusion-Augmented Tabular Architecture for Local Utility and Security"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
-authors = [{ name = "Emanuel Lazaro Custodio Silva" }]
+authors = [{ name = "Emanuel Lázaro Custódio Silva", email = "emanuellzr01@outlook.com" }]
 dependencies = [
   "numpy>=1.26,<3",
   "pandas>=2.2",
@@ -26,17 +26,17 @@ dependencies = [
 
 [project.optional-dependencies]
 audit = ["lightgbm>=4.3", "catboost>=1.2"]
-frontend = ["streamlit>=1.36", "streamlit-component-lib>=2.0"]
-training = ["torch>=2.3", "onnx>=1.16", "onnxruntime>=1.18"]
+frontend = ["streamlit>=1.36"]
+training = ["torch>=2.3", "onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.1"]
 test = ["pytest>=8.2", "httpx>=0.27"]
 dev = [
   "lightgbm>=4.3",
   "catboost>=1.2",
   "streamlit>=1.36",
-  "streamlit-component-lib>=2.0",
   "torch>=2.3",
   "onnx>=1.16",
   "onnxruntime>=1.18",
+  "onnxscript>=0.1",
   "pytest>=8.2",
   "httpx>=0.27",
 ]

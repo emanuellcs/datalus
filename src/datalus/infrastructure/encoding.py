@@ -76,6 +76,7 @@ class CategoricalVocabulary:
 
     column: str
     categories: list[str]
+    frequencies: dict[str, int] | None = None
     null_token: str = "__NULL__"
     unknown_token: str = "__UNKNOWN__"
 
@@ -85,7 +86,10 @@ class CategoricalVocabulary:
         categories = sorted(
             {value for value in normalized if value not in {"__NULL__", "__UNKNOWN__"}}
         )
-        return cls(column=column, categories=categories)
+        frequencies: dict[str, int] = {}
+        for value in normalized:
+            frequencies[value] = frequencies.get(value, 0) + 1
+        return cls(column=column, categories=categories, frequencies=frequencies)
 
     @property
     def vocab(self) -> dict[str, int]:
@@ -102,6 +106,10 @@ class CategoricalVocabulary:
 
     def transform(self, values: np.ndarray) -> np.ndarray:
         vocab = self.vocab
+        # Observed rare categories are deliberately preserved as first-class
+        # tokens. Only values that were never present during fitting map to the
+        # unknown sentinel, which prevents long-tail government classes from
+        # being erased by the encoder.
         return np.array(
             [
                 vocab.get(_normalize_category(value), vocab[self.unknown_token])
@@ -122,6 +130,7 @@ class CategoricalVocabulary:
         return {
             "column": self.column,
             "categories": self.categories,
+            "frequencies": self.frequencies or {},
             "null_token": self.null_token,
             "unknown_token": self.unknown_token,
         }
@@ -162,7 +171,6 @@ class TabularEncoder:
             for column, meta in self.schema_metadata.items()
             if meta.get("retained", meta.get("encoding_strategy") != "DROP")
             and meta.get("encoding_strategy") != "DROP"
-            and not meta.get("is_target", False)
         }
 
     @property
@@ -194,6 +202,20 @@ class TabularEncoder:
             self.schema_metadata[column]["cardinality"] = self.categorical_vocabs[
                 column
             ].size
+            self.schema_metadata[column]["category_frequencies"] = (
+                self.categorical_vocabs[column].frequencies or {}
+            )
+            rare_threshold = int(
+                self.schema_metadata[column].get("rare_category_threshold") or 5
+            )
+            self.schema_metadata[column]["rare_category_count"] = sum(
+                1
+                for count in (
+                    self.categorical_vocabs[column].frequencies or {}
+                ).values()
+                if count <= rare_threshold
+            )
+            self.schema_metadata[column]["rare_categories_preserved"] = True
         return self
 
     def transform(self, frame: pl.DataFrame) -> EncodedBatch:

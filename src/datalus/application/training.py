@@ -63,7 +63,9 @@ class DatalusTrainer:
             hidden_dims=config.hidden_dims,
         ).to(self.device)
         self.diffusion = TabularDiffusion(
-            self.denoiser, num_timesteps=config.num_timesteps
+            self.denoiser,
+            num_timesteps=config.num_timesteps,
+            condition_dropout=config.condition_dropout,
         ).to(self.device)
         self.optimizer = AdamW(
             list(self.diffusion.parameters()) + list(self.projector.parameters()),

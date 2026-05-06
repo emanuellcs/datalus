@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import csv
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -43,11 +44,13 @@ class ZeroShotPreprocessor:
         high_cardinality_threshold: int = 50,
         sample_size: int = 100_000,
         target_column: str | None = None,
+        rare_category_threshold: int = 5,
         null_values: Iterable[str] | None = None,
     ) -> None:
         self.high_cardinality_threshold = high_cardinality_threshold
         self.sample_size = sample_size
         self.target_column = target_column
+        self.rare_category_threshold = rare_category_threshold
         self.null_values = list(
             null_values or ["", "NA", "N/A", "null", "NULL", "None"]
         )
@@ -57,17 +60,28 @@ class ZeroShotPreprocessor:
         """Return a lazy scan for CSV, Parquet, or ORC inputs."""
 
         path = Path(file_path)
-        suffix = path.suffix.lower()
-        if suffix == ".csv":
+        suffixes = [suffix.lower() for suffix in path.suffixes]
+        suffix = suffixes[-1] if suffixes else ""
+        tabular_suffix = (
+            suffixes[-2] if suffix == ".gz" and len(suffixes) > 1 else suffix
+        )
+        if tabular_suffix in {".csv", ".tsv"}:
+            separator = (
+                "\t" if tabular_suffix == ".tsv" else _detect_csv_separator(path)
+            )
             return pl.scan_csv(
                 path,
+                separator=separator,
+                encoding="utf8-lossy",
                 infer_schema_length=10_000,
                 null_values=self.null_values,
+                ignore_errors=True,
+                truncate_ragged_lines=True,
                 try_parse_dates=True,
             )
-        if suffix == ".parquet":
+        if tabular_suffix == ".parquet":
             return pl.scan_parquet(path)
-        if suffix == ".orc":
+        if tabular_suffix == ".orc":
             try:
                 import pyarrow.dataset as ds
             except ImportError as exc:  # pragma: no cover - optional dependency path
@@ -154,12 +168,28 @@ class ZeroShotPreprocessor:
         cardinality = int(series.n_unique()) if total_count else 0
         is_target = name == self.target_column
 
+        category_frequencies = self._category_frequencies(series)
+        rare_category_count = (
+            sum(
+                1
+                for count in category_frequencies.values()
+                if count <= self.rare_category_threshold
+            )
+            if category_frequencies is not None
+            else None
+        )
+
         def profile(
             topology: str,
             strategy: str,
             retained: bool = True,
             reason: str | None = None,
         ):
+            # Category frequency metadata is part of the domain profile because
+            # long-tail categories in public data often represent rare diseases,
+            # small municipalities, or infrequent public services. DATALUS keeps
+            # those observed categories addressable instead of collapsing them
+            # into an OOV bucket during training.
             return ColumnProfile(
                 column_name=name,
                 original_dtype=dtype,
@@ -167,6 +197,14 @@ class ZeroShotPreprocessor:
                 encoding_strategy=strategy,
                 cardinality=cardinality,
                 null_ratio=float(null_ratio),
+                category_frequencies=category_frequencies,
+                rare_category_count=rare_category_count,
+                rare_category_threshold=(
+                    self.rare_category_threshold
+                    if category_frequencies is not None
+                    else None
+                ),
+                rare_categories_preserved=True,
                 is_target=is_target,
                 retained=retained,
                 reason=reason,
@@ -230,6 +268,36 @@ class ZeroShotPreprocessor:
         if values.is_empty():
             return 0.0
         return float(values.str.len_chars().mean())
+
+    def _category_frequencies(self, series: pl.Series) -> dict[str, int] | None:
+        """Return bounded frequency metadata for categorical-like columns."""
+
+        if series.dtype not in {pl.Boolean, pl.String, pl.Utf8, pl.Categorical}:
+            return None
+        counts = series.cast(pl.String).fill_null("__NULL__").value_counts(sort=True)
+        if counts.is_empty():
+            return {}
+        name_col = counts.columns[0]
+        count_col = counts.columns[1]
+        return {
+            str(row[name_col]): int(row[count_col])
+            for row in counts.iter_rows(named=True)
+        }
+
+
+def _detect_csv_separator(path: Path) -> str:
+    """Infer common Brazilian open-data delimiters without materializing data."""
+
+    try:
+        with path.open("rb") as handle:
+            sample = handle.read(65_536).decode("latin1", errors="ignore")
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        return dialect.delimiter
+    except Exception:
+        # Brazilian government CSV files commonly use semicolons because commas
+        # appear as decimal separators in spreadsheets; comma remains the safe
+        # fallback when sniffing cannot prove otherwise.
+        return ";"
 
 
 def load_schema(schema_path: str | Path) -> dict[str, dict[str, Any]]:
