@@ -281,7 +281,7 @@ $$
 The alert threshold is the configured percentile of each real record's second-nearest real neighbor distance:
 
 $$
-\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\left\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{train}})\right\}_{j=1}^{N}\right)
+\tau_{\mathrm{DCR}}=\text{percentile}_{p}\left(\{d_2(\mathbf{x}_j^{\mathrm{real}},R_{\mathrm{train}})\}_{j=1}^{N}\right)
 $$
 
 The memorization ratio is:
