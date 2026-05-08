@@ -160,7 +160,7 @@ $$
 q(\mathbf{x}_t\mid\mathbf{x}_{t-1})=\mathcal{N}\left(\mathbf{x}_t;\sqrt{1-\beta_t}\mathbf{x}_{t-1},\beta_t\mathbf{I}\right)
 $$
 
-With $\alpha_t=1-\beta_t$ and $\bar{\alpha}_t=\prod_{s=1}^{t}\alpha_s$, the closed-form marginal is:
+With $\alpha_t=1-\beta_t$ and $`\bar{\alpha}_t=\prod_{s=1}^{t}\alpha_s`$, the closed-form marginal is:
 
 $$
 q(\mathbf{x}_t\mid\mathbf{x}_0)=\mathcal{N}\left(\mathbf{x}_t;\sqrt{\bar{\alpha}_t}\mathbf{x}_0,(1-\bar{\alpha}_t)\mathbf{I}\right)
