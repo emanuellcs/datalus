@@ -5,7 +5,7 @@
   // Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
   "image": "mcr.microsoft.com/devcontainers/base:trixie",
   "features": {
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:": {
       "version": "latest",
       "moby": false,
       "installDockerCompose": true
