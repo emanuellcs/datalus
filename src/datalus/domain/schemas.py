@@ -115,3 +115,6 @@ class TrainingConfig(DomainModel):
     warmup_steps: int = Field(default=500, ge=0)
     max_grad_norm: float = Field(default=1.0, gt=0.0)
     max_encoder_fit_rows: int = Field(default=100_000, ge=1)
+    gpu: str | None = Field(
+        default=None, description="CUDA device indices, e.g., '0' or '0,1'"
+    )

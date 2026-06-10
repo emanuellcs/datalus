@@ -7,6 +7,7 @@ modules, and checkpoint persistence.
 
 from __future__ import annotations
 
+import os
 import hashlib
 import json
 import logging
@@ -38,6 +39,9 @@ class DatalusTrainer:
     """Training orchestrator with deterministic checkpointing and AMP."""
 
     def __init__(self, config: TrainingConfig) -> None:
+        if config.gpu is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = config.gpu
+
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.output_dir = Path(config.output_dir)
@@ -67,6 +71,12 @@ class DatalusTrainer:
             num_timesteps=config.num_timesteps,
             condition_dropout=config.condition_dropout,
         ).to(self.device)
+
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            logger.info(f"Activating DataParallel on {torch.cuda.device_count()} GPUs.")
+            self.projector = torch.nn.DataParallel(self.projector)
+            self.diffusion = torch.nn.DataParallel(self.diffusion)
+
         self.optimizer = AdamW(
             list(self.diffusion.parameters()) + list(self.projector.parameters()),
             lr=config.learning_rate,
@@ -89,7 +99,9 @@ class DatalusTrainer:
         self.scaler = torch.amp.GradScaler(
             "cuda", enabled=config.amp and self.device.type == "cuda"
         )
-        self.ema = EMA(self.diffusion, decay=config.ema_decay)
+        self.ema = EMA(
+            getattr(self.diffusion, "module", self.diffusion), decay=config.ema_decay
+        )
         self.start_epoch = 0
         self.start_batch_index = 0
         self.global_step = 0
@@ -106,8 +118,12 @@ class DatalusTrainer:
 
     def resume(self, checkpoint_path: str | Path) -> None:
         checkpoint = load_checkpoint(checkpoint_path, map_location=self.device)
-        self.diffusion.load_state_dict(checkpoint["diffusion_state"])
-        self.projector.load_state_dict(checkpoint["projector_state"])
+        getattr(self.diffusion, "module", self.diffusion).load_state_dict(
+            checkpoint["diffusion_state"]
+        )
+        getattr(self.projector, "module", self.projector).load_state_dict(
+            checkpoint["projector_state"]
+        )
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])
         self.scheduler.load_state_dict(checkpoint["scheduler_state"])
         self.scaler.load_state_dict(checkpoint["scaler_state"])
@@ -158,7 +174,7 @@ class DatalusTrainer:
             self.device.type, enabled=self.config.amp and self.device.type == "cuda"
         ):
             latent = self.projector(x_num, x_cat)
-            loss = self.diffusion(latent)["loss"]
+            loss = self.diffusion(latent)["loss"].mean()
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(
@@ -168,7 +184,7 @@ class DatalusTrainer:
         self.scaler.step(self.optimizer)
         self.scaler.update()
         self.scheduler.step()
-        self.ema.update(self.diffusion)
+        self.ema.update(getattr(self.diffusion, "module", self.diffusion))
         return float(loss.detach().cpu().item())
 
     def save_checkpoint(
@@ -188,8 +204,12 @@ class DatalusTrainer:
             "loss_history": self.loss_history,
             "config": self.config.model_dump(mode="json"),
             "config_hash": _config_hash(self.config.model_dump(mode="json")),
-            "diffusion_state": self.diffusion.state_dict(),
-            "projector_state": self.projector.state_dict(),
+            "diffusion_state": getattr(
+                self.diffusion, "module", self.diffusion
+            ).state_dict(),
+            "projector_state": getattr(
+                self.projector, "module", self.projector
+            ).state_dict(),
             "optimizer_state": self.optimizer.state_dict(),
             "scheduler_state": self.scheduler.state_dict(),
             "scaler_state": self.scaler.state_dict(),
