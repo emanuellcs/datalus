@@ -1,5 +1,6 @@
 # DATALUS: Diffusion-Augmented Tabular Architecture for Local Utility and Security
 
+>[!NOTE]
 > 🇧🇷 **Atenção Comissão Julgadora do 32º Prêmio Jovem Cientista:** A documentação oficial, elaborada com o rigor científico exigido pelo edital e detalhando o impacto na LGPD e em políticas públicas, encontra-se no arquivo [README_pt-BR.md](./README_pt-BR.md).
 
 DATALUS is a production-oriented Generative AI framework for synthetic tabular data. It is designed for high-dimensional, heterogeneous, privacy-sensitive government datasets, with a specific proof-of-concept path for Brazilian public-sector health data. The system learns a joint distribution over tabular records, samples new microdata from that distribution, and subjects generated artifacts to reproducible privacy and utility audits before release.
@@ -54,7 +55,7 @@ Primary public-data references:
 | Layer | Minimum | Recommended | Notes |
 | --- | --- | --- | --- |
 | Python | 3.11 | 3.11 or newer | The package metadata declares `requires-python >=3.11`. |
-| Training GPU | CPU works for tests | NVIDIA T4 15 GB VRAM or better | Colab T4 is the target constrained GPU profile. |
+| Training GPU | CPU works for tests | NVIDIA T4 15 GB VRAM or better | Multi-GPU supported via `DataParallel`. |
 | Training RAM | 8 GB | 16 GB or more | Lazy ingestion helps, but encoding and audit projection need memory. |
 | Browser inference | Modern Chromium, Firefox, or Edge | Browser with WebAssembly and Cache API | The React component uses `onnxruntime-web` WASM locally. |
 | Node.js | 20 in CI | 20 LTS | Frontend CI uses `actions/setup-node@v4` with Node 20. |
@@ -386,7 +387,7 @@ The Command Line Interface (CLI) is implemented with Typer in `src/datalus/inter
 
 ```bash
 datalus ingest raw.csv artifacts/demo/processed.parquet --schema-path artifacts/demo/schema_config.json --target-column target
-datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --epochs 5 --batch-size 2048
+datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --epochs 5 --batch-size 2048 --gpu 0
 datalus sample artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json artifacts/demo/synthetic.parquet --n-records 10000 --ddim-steps 50 --cfg-scale 1.0
 datalus augment artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json small.parquet artifacts/demo/augmented.parquet --n-records 5000
 datalus balance artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json train.parquet artifacts/demo/balanced.parquet target '{"0": 5000, "1": 5000}'
@@ -418,7 +419,7 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | Command | Positional arguments | Options and defaults | Expected output |
 | --- | --- | --- | --- |
 | `ingest` | `input_path`, `output_path` | `--schema-path artifacts/schema_config.json`, `--target-column None` | Prints schema and processed Parquet paths. Writes Snappy Parquet and schema metadata. |
-| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
+| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
 | `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Writes synthetic Parquet with Snappy compression. |
 | `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Writes original rows plus synthetic rows selected to original columns. |
 | `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--max-attempts 10`, `--strict False` | Writes Parquet approaching requested class counts. Raises if `--strict` and attempts are exhausted. |
@@ -476,6 +477,16 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | `warmup_steps` | `500` |
 | `max_grad_norm` | `1.0` |
 | `max_encoder_fit_rows` | `100000` |
+| `gpu` | `None` |
+
+### Multi-GPU Scaling
+
+DATALUS supports explicit GPU allocation and automatic multi-GPU orchestration:
+
+- **GPU Allocation**: Use the `--gpu` flag to specify CUDA device indices (e.g., `--gpu 0` or `--gpu 0,1`). The system sets `CUDA_VISIBLE_DEVICES` before the PyTorch CUDA context initializes to ensure strict hardware masking.
+- **DataParallel**: If multiple GPUs are detected, the system automatically wraps the `TabularDenoiserMLP` and `FeatureProjector` in `torch.nn.DataParallel`.
+- **Loss Reduction**: In multi-GPU mode, the MSE loss vector is reduced across devices using `.mean()` to ensure a scalar objective for backpropagation.
+- **Checkpoint Portability**: Serialization and resumption logic automatically unwrap the `.module` prefix added by `DataParallel`. This ensures that checkpoints saved on multi-GPU systems remain compatible with single-GPU or CPU-only inference.
 
 ### Deterministic Checkpointing
 
