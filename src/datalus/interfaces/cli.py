@@ -58,6 +58,9 @@ def train(
     batch_size: int = 2048,
     max_steps: Optional[int] = None,
     resume_from: Optional[Path] = None,
+    gpu: Optional[str] = typer.Option(
+        None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1'"
+    ),
 ) -> None:
     """Train DATALUS with deterministic checkpointing."""
 
@@ -68,6 +71,7 @@ def train(
             output_dir=str(output_dir),
             epochs=epochs,
             batch_size=batch_size,
+            gpu=gpu,
         )
     )
     if resume_from is not None:
