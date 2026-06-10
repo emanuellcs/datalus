@@ -357,7 +357,7 @@ Em outro terminal:
 
 ```bash
 datalus ingest raw.csv artifacts/demo/processed.parquet --schema-path artifacts/demo/schema_config.json --target-column target
-datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --epochs 5 --batch-size 2048
+datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --epochs 5 --batch-size 2048 --gpu 0
 datalus sample artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json artifacts/demo/synthetic.parquet --n-records 10000 --ddim-steps 50 --cfg-scale 1.0
 datalus audit real_train.parquet artifacts/demo/synthetic.parquet artifacts/demo/schema_config.json artifacts/demo/audit_report.json --target-column target --mia-mode release
 datalus export-onnx artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json artifacts/demo --quantize
@@ -398,7 +398,7 @@ A Interface de Linha de Comando (CLI) está em `src/datalus/interfaces/cli.py` e
 | Comando | Argumentos posicionais | Opções e defaults | Saída esperada |
 | --- | --- | --- | --- |
 | `ingest` | `input_path`, `output_path` | `--schema-path artifacts/schema_config.json`, `--target-column None` | Grava schema e Parquet Snappy. |
-| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None` | Grava encoder e checkpoints em `output_dir/checkpoints`. |
+| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None` | Grava encoder e checkpoints em `output_dir/checkpoints`. |
 | `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Grava Parquet sintético. |
 | `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Grava registros originais mais sintéticos. |
 | `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--max-attempts 10`, `--strict False` | Grava Parquet aproximando contagens solicitadas. |
@@ -455,6 +455,16 @@ A Interface de Linha de Comando (CLI) está em `src/datalus/interfaces/cli.py` e
 | `warmup_steps` | `500` |
 | `max_grad_norm` | `1.0` |
 | `max_encoder_fit_rows` | `100000` |
+| `gpu` | `None` |
+
+### Escalonamento Multi-GPU
+
+O DATALUS suporta alocação explícita de hardware e orquestração automática multi-GPU:
+
+- **Alocação de GPU**: Utilize a flag `--gpu` para especificar os índices dos dispositivos CUDA (ex: `--gpu 0` ou `--gpu 0,1`). O sistema mascara o hardware via `CUDA_VISIBLE_DEVICES` antes da inicialização do contexto CUDA do PyTorch.
+- **DataParallel**: Caso múltiplas GPUs sejam detectadas, o sistema envolve automaticamente o `TabularDenoiserMLP` e o `FeatureProjector` em `torch.nn.DataParallel`.
+- **Redução de Perda**: Em modo multi-GPU, o vetor de perda MSE é reduzido entre os dispositivos via `.mean()` para garantir um objetivo escalar para o backpropagation.
+- **Portabilidade de Checkpoints**: A lógica de serialização e retomada remove automaticamente o prefixo `.module` adicionado pelo `DataParallel`. Isso garante que checkpoints salvos em sistemas multi-GPU permaneçam compatíveis com inferência em GPU única ou apenas CPU.
 
 ### Checkpointing Determinístico
 
