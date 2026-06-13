@@ -7,6 +7,7 @@
 - [Requisitos de Sistema](#requisitos-de-sistema)
 - [Arquitetura em Seis Camadas](#arquitetura-em-seis-camadas)
 - [Capacidades Generativas](#capacidades-generativas)
+- [Notebooks Interativos](#notebooks-interativos)
 - [Robustez para Dados Públicos Brasileiros](#robustez-para-dados-públicos-brasileiros)
 - [Fundamentos Matemáticos](#fundamentos-matemáticos)
 - [Orquestrador Autônomo De Auditoria](#orquestrador-autônomo-de-auditoria)
@@ -107,6 +108,19 @@ O DATALUS deve ser avaliado como ecossistema de IA Generativa, não como ferrame
 | Serviço de artefatos | Disponibilizar artefatos para inferência local no navegador. | `datalus serve` |
 
 A lógica de Classifier-Free Guidance está implementada na camada de difusão. No caminho atual de treinamento padrão, o denoiser é instanciado sem vetor de contexto; portanto, `cfg_scale=1.0` representa o caminho incondicional e outros valores só têm efeito em modelos com contexto. A exportação ONNX ainda registra paridade INT8 sob amplificação `cfg_scale=3.0`, pois esse é o modo correto de proteger artefatos quando guidance for habilitado.
+
+## Notebooks Interativos
+
+O DATALUS fornece uma suíte de Jupyter Notebooks de nível de produção, projetados para diferentes partes interessadas e ambientes. Os notebooks estão localizados em **Inglês** e **Português Brasileiro**.
+
+| Notebook | Foco | Operações Chave |
+| --- | --- | --- |
+| `00_datasus_poc_quickstart` | **Showcase/Quickstart** | Demonstração do pipeline ponta a ponta com uma pequena amostra do SIH-SUS. Ideal para comissões julgadoras. |
+| `01_datalus_training_factory` | **Fábrica de Treinamento** | Padrões de computação pesada (Kaggle/Multi-GPU), ingestão lazy via Polars (seguro contra OOM) e quantização INT8. |
+| `02_datalus_generative_studio` | **Estúdio Generativo** | Simulação de cenários, balanceamento de classes minoritárias, inpainting tabular e análise estatística via KDE. |
+| `03_datalus_oaa_compliance` | **Privacidade e Auditoria** | Verificação formal via Orquestrador Autônomo de Auditoria (OAA), ataques Shadow-MIA e verificações DCR. |
+
+Os notebooks encontram-se no diretório `notebooks/` e foram estruturados para execução fluida no Google Colab, Kaggle ou ambientes Jupyter locais.
 
 ## Robustez para Dados Públicos Brasileiros
 
