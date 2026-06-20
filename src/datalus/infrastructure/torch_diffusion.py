@@ -52,7 +52,7 @@ class VarianceSchedule(nn.Module):
         )
 
     def extract(self, values: Tensor, t: Tensor, x_shape: torch.Size) -> Tensor:
-        out = values.gather(0, t.detach().cpu()).to(device=t.device)
+        out = values.gather(0, t)
         return out.reshape(t.shape[0], *((1,) * (len(x_shape) - 1)))
 
     def alpha_bar_at(self, timestep: int | Tensor, device: torch.device) -> Tensor:
