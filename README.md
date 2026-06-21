@@ -13,6 +13,7 @@ DATALUS is not an anonymization script. It is a generative ecosystem for ab-init
 - [System Requirements](#system-requirements)
 - [Architecture](#architecture)
 - [Generative Capabilities](#generative-capabilities)
+- [Interactive Notebooks](#interactive-notebooks)
 - [Mathematical Foundation](#mathematical-foundation)
 - [Autonomous Audit Orchestrator](#autonomous-audit-orchestrator)
 - [Installation and Developer Setup](#installation-and-developer-setup)
@@ -128,6 +129,19 @@ DATALUS exposes distinct workflows because synthetic data systems have different
 | Artifact serving | Serve registry artifacts for browser-local inference. | `datalus serve` |
 
 The current denoiser exposes CFG-compatible inference logic. In the default training path, models are instantiated without a context vector, so `cfg_scale=1.0` is the unconditional path and changing `cfg_scale` has no effect unless a context-enabled denoiser is introduced. The ONNX export path still records an INT8 CFG amplification parity guard at `cfg_scale=3.0` because quantization drift can become operationally relevant when guidance is enabled.
+
+## Interactive Notebooks
+
+DATALUS provides a suite of production-grade Jupyter Notebooks designed for different stakeholders and environments. These notebooks are localized in both **English** and **Brazilian Portuguese**.
+
+| Notebook | Focus | Key Operations |
+| --- | --- | --- |
+| `00_datasus_poc_quickstart` | **Showcase/Quickstart** | End-to-end pipeline demonstration using a small SIH-SUS sample. Ideal for judging panels and quick verification. |
+| `01_datalus_training_factory` | **High-Scale Training** | Heavy compute patterns (Kaggle/Multi-GPU), OOM-safe Polars lazy ingestion, and INT8 quantization. |
+| `02_datalus_generative_studio` | **Applied Research** | Scenario simulation, minority class balancing, tabular inpainting, and KDE-based statistical analysis. |
+| `03_datalus_oaa_compliance` | **Privacy & Audit** | Formal verification via Autonomous Audit Orchestrator (OAA), Shadow-MIA attacks, and DCR memorization checks. |
+
+The notebooks are located in the `notebooks/` directory and are structured to run seamlessly in Google Colab, Kaggle, or local Jupyter environments.
 
 ## Mathematical Foundation
 
