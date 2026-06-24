@@ -1,4 +1,4 @@
-"""CLI delivery adapter.
+"""CLI delivery adapter with enterprise-grade help system and verbosity control.
 
 The command line interface is deliberately thin. It translates user input into
 application use-case calls, then reports file locations and audit outcomes. The
@@ -8,11 +8,15 @@ CLI does not own PyTorch, ONNX, or Polars workflow logic.
 from __future__ import annotations
 
 import json
+import logging
+import sys
 from pathlib import Path
 from typing import Optional
 
 import polars as pl
 import typer
+from rich.console import Console
+from rich.logging import RichHandler
 
 from datalus.application.audit import (
     PrivacyEvaluator,
@@ -31,38 +35,201 @@ from datalus.application.training import DatalusTrainer
 from datalus.domain.schemas import ShadowMIAConfig, TrainingConfig
 from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
 
-app = typer.Typer(help="DATALUS synthetic tabular data framework.")
+# ============================================================================
+# Global logging setup
+# ============================================================================
+
+_console = Console()
+_logger = logging.getLogger("datalus")
 
 
-@app.command()
-def ingest(
-    input_path: Path,
-    output_path: Path,
-    schema_path: Path = Path("artifacts/schema_config.json"),
-    target_column: Optional[str] = None,
+def setup_logging(verbose: str = "WARNING") -> None:
+    """Configure global logging level based on --verbose flag.
+
+    Args:
+        verbose: Log level - "WARNING", "INFO", or "DEBUG"
+    """
+    level_map = {
+        "WARNING": logging.WARNING,
+        "INFO": logging.INFO,
+        "DEBUG": logging.DEBUG,
+    }
+    log_level = level_map.get(verbose, logging.WARNING)
+
+    # Clear existing handlers
+    _logger.handlers.clear()
+
+    # Add Rich handler for structured, colored output
+    handler = RichHandler(
+        console=_console,
+        show_time=False,
+        show_level=True,
+        rich_tracebacks=True,
+    )
+    handler.setLevel(log_level)
+    formatter = logging.Formatter("%(message)s")
+    handler.setFormatter(formatter)
+    _logger.addHandler(handler)
+    _logger.setLevel(log_level)
+
+    # Align root logger
+    logging.getLogger().setLevel(log_level)
+
+
+# ============================================================================
+# Root application with global options
+# ============================================================================
+
+WORKFLOW_EPILOG = """
+╭─ QUICK START ───────────────────────────────────────────╮
+│                                                         │
+│ WORKFLOW EXAMPLE:                                       │
+│ ─────────────────                                       │
+│                                                         │
+│ 1. Ingest data and infer schema:                        │
+│    $ datalus ingest --input-path raw.csv \\             │
+│        --output-path prepped.parquet \\                 │
+│        --schema-path schema.json                        │
+│                                                         │
+│ 2. Train diffusion model:                               │
+│    $ datalus train --schema-path schema.json \\         │
+│        --data-path prepped.parquet \\                   │
+│        --output-dir ./checkpoints --epochs 10           │
+│                                                         │
+│ 3. Generate synthetic records:                          │
+│    $ datalus sample --checkpoint-path ./checkpoints/... │
+│        --encoder-path ./checkpoints/encoder.json \\     │
+│        --output-path synthetic.parquet --n-records 1000 │
+│                                                         │
+│ Run 'datalus <command> --help' for detailed options.    │
+│                                                         │
+╰─────────────────────────────────────────────────────────╯
+"""
+
+app = typer.Typer(
+    help="DATALUS — Synthetic tabular data generation via diffusion models.",
+    no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
+)
+
+
+@app.callback()
+def global_config(
+    verbose: str = typer.Option(
+        "WARNING",
+        "--verbose",
+        help="Logging level: WARNING (errors only), INFO (progress), or DEBUG (detailed)",
+    ),
 ) -> None:
-    """Infer schema and stream retained data to Parquet."""
+    """Configure global logging verbosity before running commands."""
+    setup_logging(verbose)
 
+
+# ============================================================================
+# Data Engineering & Preparation
+# ============================================================================
+
+
+@app.command(
+    rich_help_panel="Data Engineering & Preparation",
+    short_help="Infer schema and preprocess data to Parquet",
+)
+def ingest(
+    input_path: Path = typer.Argument(..., help="Input data file or directory path"),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    schema_path: Path = typer.Option(
+        Path("artifacts/schema_config.json"),
+        "--schema-path",
+        help="Path to save inferred schema JSON (default: artifacts/schema_config.json)",
+    ),
+    target_column: Optional[str] = typer.Option(
+        None,
+        "--target-column",
+        help="Optional target column name for supervised learning context",
+    ),
+) -> None:
+    """Infer schema from raw tabular data and write preprocessed output to Parquet.
+
+    The ingest command analyzes your input data, infers a zero-shot schema,
+    and writes standardized Parquet output suitable for training. The schema
+    is saved as JSON for later use in train, sample, and audit commands.
+
+    Example:
+        datalus ingest --input-path raw_data.csv --output-path data.parquet
+    """
+    _logger.info(f"Ingesting data from {input_path}...")
     prep = ZeroShotPreprocessor(target_column=target_column)
     prep.fit_transform_to_parquet(input_path, output_path, schema_path)
-    typer.echo(f"Schema written to {schema_path}")
+    _logger.info(f"Schema written to {schema_path}")
     typer.echo(f"Processed Parquet written to {output_path}")
 
 
-@app.command()
+# ============================================================================
+# Core Modeling & Training
+# ============================================================================
+
+
+@app.command(
+    rich_help_panel="Core Modeling & Training",
+    short_help="Train diffusion model with checkpointing",
+)
 def train(
-    schema_path: Path,
-    data_path: Path,
-    output_dir: Path,
-    epochs: int = 1,
-    batch_size: int = 2048,
-    max_steps: Optional[int] = None,
-    resume_from: Optional[Path] = None,
+    schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
+    data_path: Path = typer.Argument(..., help="Path to Parquet training data"),
+    output_dir: Path = typer.Argument(
+        ..., help="Directory for checkpoints and outputs"
+    ),
+    epochs: int = typer.Option(
+        1, "--epochs", "-e", help="Number of training epochs (default: 1)"
+    ),
+    batch_size: int = typer.Option(
+        2048, "--batch-size", "-b", help="Batch size for training (default: 2048)"
+    ),
+    max_steps: Optional[int] = typer.Option(
+        None, "--max-steps", help="Stop training after N global steps (optional)"
+    ),
+    resume_from: Optional[Path] = typer.Option(
+        None, "--resume-from", "-r", help="Resume training from checkpoint (optional)"
+    ),
     gpu: Optional[str] = typer.Option(
-        None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1'"
+        None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1' (optional)"
+    ),
+    keep_last: Optional[int] = typer.Option(
+        None, "--keep-last", help="Keep only N most recent checkpoints (optional)"
+    ),
+    save_every: int = typer.Option(
+        1, "--save-every", help="Save checkpoint every N epochs (default: 1)"
+    ),
+    save_strategy: str = typer.Option(
+        "latest",
+        "--save-strategy",
+        help="Strategy: 'all' (keep all), 'latest' (rolling), or 'best' (track lowest loss)",
     ),
 ) -> None:
-    """Train DATALUS with deterministic checkpointing."""
+    """Train a TabDDPM diffusion model on tabular data with deterministic checkpointing.
+
+    The train command initializes a diffusion model, trains it on your data,
+    and saves periodic checkpoints. Supports resuming from interruptions with
+    full RNG state restoration. Use --verbose INFO to see epoch summaries and
+    throughput metrics.
+
+    Checkpoint Management:
+      - Use --keep-last N to automatically delete old checkpoints (keeps N most recent)
+      - Use --save-strategy best to maintain a checkpoint_best.pt file tracking lowest loss
+      - Use --save-strategy all to keep every checkpoint (default: latest - rolling)
+
+    Example:
+        datalus train --schema-path schema.json --data-path data.parquet \\
+            --output-dir ./checkpoints --epochs 10 --keep-last 3 \\
+            --save-strategy best
+
+        datalus train --schema-path schema.json --data-path data.parquet \\
+            --output-dir ./checkpoints --resume-from ./checkpoints/checkpoint_latest.pt
+    """
+    _logger.info(
+        f"Training on {data_path} with schema {schema_path}. "
+        f"Saving checkpoints to {output_dir}"
+    )
 
     trainer = DatalusTrainer(
         TrainingConfig(
@@ -72,26 +239,61 @@ def train(
             epochs=epochs,
             batch_size=batch_size,
             gpu=gpu,
+            keep_last=keep_last,
+            save_every=save_every,
+            save_strategy=save_strategy,
         )
     )
     if resume_from is not None:
+        _logger.info(f"Resuming training from {resume_from}")
         trainer.resume(resume_from)
     checkpoint = trainer.train(max_steps=max_steps)
     typer.echo(f"Checkpoint written to {checkpoint}")
 
 
-@app.command()
-def sample(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    output_path: Path,
-    n_records: int = 100,
-    ddim_steps: int = 50,
-    seed: int = 42,
-    cfg_scale: float = 1.0,
-) -> None:
-    """Generate a new synthetic dataset from learned distributions."""
+# ============================================================================
+# Inference & Generation
+# ============================================================================
 
+
+@app.command(
+    rich_help_panel="Inference & Generation",
+    short_help="Generate synthetic dataset ab initio",
+)
+def sample(
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    n_records: int = typer.Option(
+        100, "--n-records", "-n", help="Number of records to generate (default: 100)"
+    ),
+    ddim_steps: int = typer.Option(
+        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
+    cfg_scale: float = typer.Option(
+        1.0,
+        "--cfg-scale",
+        help="Classifier-free guidance scale (default: 1.0 = disabled)",
+    ),
+    checkpoint_source: str = typer.Option(
+        "latest",
+        "--checkpoint-source",
+        help="Use 'latest' or 'best' checkpoint (default: latest)",
+    ),
+) -> None:
+    """Generate a new synthetic dataset from learned distributions.
+
+    The sample command loads a trained checkpoint and generates records
+    ab initio by reverse-diffusion sampling. Useful for synthetic data
+    augmentation or privacy-preserving data sharing.
+
+    Example:
+        datalus sample --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --output-path synthetic.parquet --n-records 5000
+    """
+    _logger.info(f"Sampling {n_records} records from checkpoint {checkpoint_path}...")
     frame = sample_records(
         checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
     )
@@ -100,19 +302,46 @@ def sample(
     typer.echo(f"Synthetic records written to {output_path}")
 
 
-@app.command("augment")
+@app.command(
+    rich_help_panel="Inference & Generation",
+    short_help="Append synthetic records to existing dataset",
+)
 def augment(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    input_path: Path,
-    output_path: Path,
-    n_records: int = 100,
-    ddim_steps: int = 50,
-    seed: int = 42,
-    cfg_scale: float = 1.0,
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    input_path: Path = typer.Argument(..., help="Input Parquet file to augment"),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    n_records: int = typer.Option(
+        100, "--n-records", "-n", help="Number of records to append (default: 100)"
+    ),
+    ddim_steps: int = typer.Option(
+        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
+    cfg_scale: float = typer.Option(
+        1.0,
+        "--cfg-scale",
+        help="Classifier-free guidance scale (default: 1.0 = disabled)",
+    ),
+    checkpoint_source: str = typer.Option(
+        "latest",
+        "--checkpoint-source",
+        help="Use 'latest' or 'best' checkpoint (default: latest)",
+    ),
 ) -> None:
-    """Append synthetic records to scale up a small dataset."""
+    """Append synthetic records to scale up a small dataset.
 
+    The augment command loads your real data and generates synthetic
+    records matching the learned distribution, then appends them to the
+    original. Useful for addressing data scarcity or class imbalance.
+
+    Example:
+        datalus augment --checkpoint-path ./checkpoints/checkpoint_best.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --input-path original.parquet \\
+            --output-path augmented.parquet --n-records 10000
+    """
+    _logger.info(f"Augmenting {input_path} with {n_records} synthetic records...")
     frame = augment_records(
         checkpoint_path,
         encoder_path,
@@ -127,22 +356,61 @@ def augment(
     typer.echo(f"Augmented dataset written to {output_path}")
 
 
-@app.command("balance")
+@app.command(
+    rich_help_panel="Inference & Generation",
+    short_help="Generate records to achieve target class distribution",
+)
 def balance(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    input_path: Path,
-    output_path: Path,
-    target_column: str,
-    target_distribution_json: str,
-    ddim_steps: int = 50,
-    seed: int = 42,
-    cfg_scale: float = 1.0,
-    max_attempts: int = 10,
-    strict: bool = False,
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    input_path: Path = typer.Argument(
+        ..., help="Input Parquet with class labels to balance"
+    ),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    target_column: str = typer.Argument(
+        ..., help="Target column name for class labels"
+    ),
+    target_distribution_json: str = typer.Argument(
+        ..., help='Target distribution as JSON, e.g., \'{"A": 0.5, "B": 0.5}\''
+    ),
+    ddim_steps: int = typer.Option(
+        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
+    cfg_scale: float = typer.Option(
+        1.0,
+        "--cfg-scale",
+        help="Classifier-free guidance scale (default: 1.0 = disabled)",
+    ),
+    max_attempts: int = typer.Option(
+        10, "--max-attempts", help="Maximum sampling attempts (default: 10)"
+    ),
+    strict: bool = typer.Option(
+        False, "--strict", help="Fail if target distribution not achieved"
+    ),
+    checkpoint_source: str = typer.Option(
+        "latest",
+        "--checkpoint-source",
+        help="Use 'latest' or 'best' checkpoint (default: latest)",
+    ),
 ) -> None:
-    """Generate records to approach a requested class distribution."""
+    """Generate records to approach a requested class distribution.
 
+    The balance command generates synthetic records to rebalance your dataset
+    toward a target class distribution. Useful for addressing imbalanced
+    classification datasets or enforcing fairness constraints.
+
+    Example:
+        datalus balance --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --input-path imbalanced.parquet \\
+            --target-column label \\
+            --target-distribution-json '{"positive": 0.5, "negative": 0.5}' \\
+            --output-path balanced.parquet
+    """
+    _logger.info(
+        f"Balancing {input_path} toward target distribution for {target_column}..."
+    )
     frame = balance_records(
         checkpoint_path,
         encoder_path,
@@ -160,19 +428,44 @@ def balance(
     typer.echo(f"Balanced dataset written to {output_path}")
 
 
-@app.command("inpaint")
+@app.command(
+    rich_help_panel="Inference & Generation",
+    short_help="Fill null values using diffusion masks",
+)
 def inpaint(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    input_path: Path,
-    output_path: Path,
-    ddim_steps: int = 50,
-    jump_length: int = 10,
-    jump_n_sample: int = 10,
-    seed: int = 42,
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    input_path: Path = typer.Argument(..., help="Input Parquet with null values"),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    ddim_steps: int = typer.Option(
+        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
+    ),
+    jump_length: int = typer.Option(
+        10, "--jump-length", help="RePaint jump length (default: 10)"
+    ),
+    jump_n_sample: int = typer.Option(
+        10, "--jump-n-sample", help="RePaint jump N sample (default: 10)"
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
+    checkpoint_source: str = typer.Option(
+        "latest",
+        "--checkpoint-source",
+        help="Use 'latest' or 'best' checkpoint (default: latest)",
+    ),
 ) -> None:
-    """Fill null values in tabular records using RePaint-style masks."""
+    """Fill null values in tabular records using RePaint-style masks.
 
+    The inpaint command uses diffusion-based inpainting to fill missing
+    values while preserving the observed values and learned data distribution.
+    Based on RePaint masking strategy for controlled generation.
+
+    Example:
+        datalus inpaint --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --input-path data_with_nulls.parquet \\
+            --output-path imputed.parquet
+    """
+    _logger.info(f"Inpainting null values in {input_path}...")
     frame = inpaint_records(
         checkpoint_path,
         encoder_path,
@@ -187,18 +480,45 @@ def inpaint(
     typer.echo(f"Inpainted records written to {output_path}")
 
 
-@app.command("counterfactual")
+@app.command(
+    rich_help_panel="Inference & Generation",
+    short_help="Generate records under do-style interventions",
+)
 def counterfactual(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    input_path: Path,
-    output_path: Path,
-    intervention_json: str,
-    ddim_steps: int = 50,
-    seed: int = 42,
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    input_path: Path = typer.Argument(..., help="Input Parquet for context"),
+    output_path: Path = typer.Argument(..., help="Output Parquet file path"),
+    intervention_json: str = typer.Argument(
+        ...,
+        help='Column interventions as JSON, e.g., \'{"age": 50, "income": 100000}\'',
+    ),
+    ddim_steps: int = typer.Option(
+        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
+    ),
+    seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
+    checkpoint_source: str = typer.Option(
+        "latest",
+        "--checkpoint-source",
+        help="Use 'latest' or 'best' checkpoint (default: latest)",
+    ),
 ) -> None:
-    """Generate records under explicit do-style column interventions."""
+    """Generate records under explicit do-style column interventions.
 
+    The counterfactual command generates synthetic records that respect
+    explicitly set column values (interventions) while allowing other
+    features to vary according to the learned distribution. Useful for
+    causal analysis, fairness auditing, and what-if scenarios.
+
+    Example:
+        datalus counterfactual \\
+            --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --input-path original.parquet \\
+            --intervention-json '{"sensitive_attr": "protected_group"}' \\
+            --output-path counterfactuals.parquet
+    """
+    _logger.info(f"Generating counterfactuals with interventions...")
     frame = counterfactual_records(
         checkpoint_path,
         encoder_path,
@@ -212,32 +532,58 @@ def counterfactual(
     typer.echo(f"Counterfactual records written to {output_path}")
 
 
-@app.command("export-onnx")
-def export_onnx(
-    checkpoint_path: Path,
-    encoder_path: Path,
-    output_dir: Path,
-    quantize: bool = True,
-) -> None:
-    """Export EMA denoiser weights to ONNX and optional INT8."""
-
-    export_onnx_artifacts(checkpoint_path, encoder_path, output_dir, quantize)
-    typer.echo(f"ONNX artifacts written to {output_dir}")
+# ============================================================================
+# Auditing & Compliance
+# ============================================================================
 
 
-@app.command()
+@app.command(
+    rich_help_panel="Auditing & Compliance",
+    short_help="Run privacy and utility audits",
+)
 def audit(
-    real_train_path: Path,
-    synthetic_path: Path,
-    schema_path: Path,
-    report_path: Path,
-    target_column: Optional[str] = None,
-    real_holdout_path: Optional[Path] = None,
-    mia_mode: str = "release",
-    max_audit_rows: Optional[int] = None,
+    real_train_path: Path = typer.Argument(
+        ..., help="Path to real training Parquet data"
+    ),
+    synthetic_path: Path = typer.Argument(..., help="Path to synthetic Parquet data"),
+    schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
+    report_path: Path = typer.Argument(..., help="Output audit report path"),
+    target_column: Optional[str] = typer.Option(
+        None,
+        "--target-column",
+        help="Optional target column for utility metrics (classification)",
+    ),
+    real_holdout_path: Optional[Path] = typer.Option(
+        None,
+        "--real-holdout-path",
+        help="Optional holdout dataset for privacy metrics (optional)",
+    ),
+    mia_mode: str = typer.Option(
+        "release",
+        "--mia-mode",
+        help="Privacy audit mode: 'release' (less strict) or 'strict'",
+    ),
+    max_audit_rows: Optional[int] = typer.Option(
+        None,
+        "--max-audit-rows",
+        help="Limit audit to N rows for speed (optional)",
+    ),
 ) -> None:
-    """Run privacy and optional utility audits."""
+    """Run privacy (Shadow MIA) and optional utility audits.
 
+    The audit command compares real and synthetic datasets using
+    Shadow Membership Inference Attacks (MIA) to quantify privacy risk,
+    and optionally runs utility metrics if a target column is provided.
+
+    Example:
+        datalus audit --real-train-path real.parquet \\
+            --synthetic-path synthetic.parquet \\
+            --schema-path schema.json \\
+            --report-path audit_report.json \\
+            --target-column label \\
+            --mia-mode release
+    """
+    _logger.info(f"Running privacy and utility audits...")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     real_train = pl.read_parquet(real_train_path)
     synthetic = pl.read_parquet(synthetic_path)
@@ -257,13 +603,69 @@ def audit(
     typer.echo(f"Audit report written to {report_path}")
 
 
-@app.command()
-def serve(
-    registry_path: Path = Path("artifacts"),
-    host: str = "0.0.0.0",
-    port: int = 8000,
+@app.command(
+    rich_help_panel="Auditing & Compliance",
+    short_help="Export EMA denoiser to ONNX format",
+)
+def export_onnx(
+    checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
+    encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
+    output_dir: Path = typer.Argument(..., help="Output directory for ONNX files"),
+    quantize: bool = typer.Option(
+        True,
+        "--quantize/--no-quantize",
+        help="Export INT8 quantized model (default: yes)",
+    ),
 ) -> None:
-    """Serve DATALUS artifacts for browser-local inference."""
+    """Export EMA denoiser weights to ONNX and optional INT8 quantization.
+
+    The export-onnx command saves the EMA denoiser model in ONNX format
+    for cross-platform inference. Optionally quantizes to INT8 for reduced
+    model size and faster CPU inference.
+
+    Example:
+        datalus export-onnx --checkpoint-path ./checkpoints/checkpoint_best.pt \\
+            --encoder-path ./checkpoints/encoder.json \\
+            --output-dir ./onnx_model \\
+            --quantize
+    """
+    _logger.info(f"Exporting checkpoint to ONNX (quantize={quantize})...")
+    export_onnx_artifacts(checkpoint_path, encoder_path, output_dir, quantize)
+    typer.echo(f"ONNX artifacts written to {output_dir}")
+
+
+# ============================================================================
+# Interfaces & Services
+# ============================================================================
+
+
+@app.command(
+    rich_help_panel="Interfaces & Services",
+    short_help="Serve FastAPI interface for inference",
+)
+def serve(
+    registry_path: Path = typer.Option(
+        Path("artifacts"),
+        "--registry-path",
+        help="Artifact registry directory (default: artifacts)",
+    ),
+    host: str = typer.Option(
+        "0.0.0.0", "--host", help="Server bind address (default: 0.0.0.0)"
+    ),
+    port: int = typer.Option(
+        8000, "--port", "-p", help="Server listen port (default: 8000)"
+    ),
+) -> None:
+    """Serve DATALUS artifacts via FastAPI for browser-local inference.
+
+    The serve command starts a FastAPI server for running inference on
+    your trained checkpoint. Access the interactive API docs at
+    http://localhost:<port>/docs
+
+    Example:
+        datalus serve --registry-path ./checkpoints --port 8000
+    """
+    _logger.info(f"Starting FastAPI server on {host}:{port}...")
 
     import os
     import uvicorn
@@ -278,9 +680,20 @@ def serve(
     )
 
 
-@app.command("streamlit")
+@app.command(
+    rich_help_panel="Interfaces & Services",
+    short_help="Launch interactive Streamlit interface",
+)
 def streamlit_app() -> None:
-    """Launch the Brazilian Portuguese Streamlit interface."""
+    """Launch the interactive Brazilian Portuguese Streamlit interface.
+
+    The streamlit command opens a web-based UI for exploring DATALUS
+    artifacts, running inference, and visualizing synthetic data.
+
+    Example:
+        datalus streamlit
+    """
+    _logger.info("Launching Streamlit interface...")
 
     import subprocess
 
@@ -288,3 +701,11 @@ def streamlit_app() -> None:
         ["streamlit", "run", "frontend/streamlit/app.py"],
         check=True,
     )
+
+
+# ============================================================================
+# CLI entry point
+# ============================================================================
+
+if __name__ == "__main__":
+    app()

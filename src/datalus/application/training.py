@@ -8,6 +8,7 @@ modules, and checkpoint persistence.
 from __future__ import annotations
 
 import os
+import sys
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ from typing import Any
 
 import polars as pl
 import torch
+from rich.progress import Progress
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
@@ -23,9 +25,11 @@ from datalus.domain.schemas import TrainingConfig
 from datalus.infrastructure.checkpointing import (
     capture_rng_state,
     load_checkpoint,
+    prune_checkpoints,
     restore_rng_state,
     save_checkpoint,
     seed_everything,
+    update_best_checkpoint,
 )
 from datalus.infrastructure.encoding import TabularEncoder
 from datalus.infrastructure.polars_loader import ChunkedParquetBatches
@@ -137,24 +141,83 @@ class DatalusTrainer:
     def train(self, max_steps: int | None = None) -> Path:
         self.diffusion.train()
         self.projector.train()
-        for epoch in range(self.start_epoch, self.config.epochs):
-            offsets = self.batches.offsets_for_epoch(epoch)
-            batch_start = self.start_batch_index if epoch == self.start_epoch else 0
-            for batch_index, offset in enumerate(
-                offsets[batch_start:], start=batch_start
-            ):
-                loss_value = self._train_batch(self.batches.read_offset(offset))
-                self.loss_history.append(loss_value)
-                self.global_step += 1
-                if self.global_step % self.config.checkpoint_every_steps == 0:
-                    self.save_checkpoint(epoch, batch_index + 1, loss_value)
-                if max_steps is not None and self.global_step >= max_steps:
-                    return self.save_checkpoint(
-                        epoch, batch_index + 1, loss_value, name="checkpoint_latest.pt"
+
+        # Check if terminal is interactive for progress bars
+        show_progress = sys.stdout.isatty()
+
+        with Progress(disable=not show_progress) as progress:
+            epoch_task = progress.add_task(
+                f"[bold cyan]Training[/bold cyan] {self.config.epochs} epochs",
+                total=self.config.epochs,
+            )
+
+            for epoch in range(self.start_epoch, self.config.epochs):
+                logger.info(
+                    f"Epoch {epoch + 1}/{self.config.epochs} "
+                    f"(global_step={self.global_step})"
+                )
+                offsets = self.batches.offsets_for_epoch(epoch)
+                batch_start = self.start_batch_index if epoch == self.start_epoch else 0
+
+                batch_task = progress.add_task(
+                    f"  [cyan]Batches[/cyan]",
+                    total=len(offsets),
+                    visible=show_progress,
+                )
+
+                for batch_index, offset in enumerate(
+                    offsets[batch_start:], start=batch_start
+                ):
+                    loss_value = self._train_batch(self.batches.read_offset(offset))
+                    self.loss_history.append(loss_value)
+                    self.global_step += 1
+
+                    logger.debug(
+                        f"Step {self.global_step}: loss={loss_value:.6f}, "
+                        f"lr={self.optimizer.param_groups[0]['lr']:.2e}"
                     )
+
+                    # Save checkpoint at configured frequency
+                    if (
+                        self.config.save_every > 0
+                        and epoch % self.config.save_every == 0
+                        and self.global_step % self.config.checkpoint_every_steps == 0
+                    ):
+                        self.save_checkpoint(epoch, batch_index + 1, loss_value)
+                        logger.info(
+                            f"Checkpoint saved at step {self.global_step}, "
+                            f"loss={loss_value:.6f}"
+                        )
+
+                    if max_steps is not None and self.global_step >= max_steps:
+                        logger.info(
+                            f"Reached max_steps={max_steps}. Stopping training."
+                        )
+                        return self.save_checkpoint(
+                            epoch,
+                            batch_index + 1,
+                            loss_value,
+                            name="checkpoint_latest.pt",
+                        )
+
+                    if show_progress:
+                        progress.update(batch_task, advance=1)
+
+                if show_progress:
+                    progress.update(batch_task, visible=False)
+                    progress.update(epoch_task, advance=1)
+
             self.start_batch_index = 0
+
+        logger.info(
+            f"Training complete. Final loss: {self.loss_history[-1]:.6f}. "
+            f"Total steps: {self.global_step}"
+        )
         return self.save_checkpoint(
-            self.config.epochs, 0, self.loss_history[-1], name="checkpoint_latest.pt"
+            self.config.epochs,
+            0,
+            self.loss_history[-1],
+            name="checkpoint_latest.pt",
         )
 
     def _train_batch(self, frame: pl.DataFrame) -> float:
@@ -217,9 +280,20 @@ class DatalusTrainer:
             "rng_state": capture_rng_state(),
         }
         save_checkpoint(path, payload)
+
+        # Update latest.pt (always kept)
         latest = self.checkpoint_dir / "checkpoint_latest.pt"
         if latest != path:
             save_checkpoint(latest, payload)
+
+        # Update best.pt if using best strategy
+        if self.config.save_strategy == "best":
+            update_best_checkpoint(self.checkpoint_dir, loss, path)
+
+        # Prune old checkpoints if retention limit is set
+        if self.config.keep_last is not None:
+            prune_checkpoints(self.checkpoint_dir, self.config.keep_last)
+
         return path
 
 
