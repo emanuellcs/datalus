@@ -19,6 +19,8 @@ import polars as pl
 import torch
 from rich.progress import Progress
 from torch.optim import AdamW
+
+from datalus._console import console as _shared_console
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from datalus.domain.schemas import TrainingConfig
@@ -142,10 +144,13 @@ class DatalusTrainer:
         self.diffusion.train()
         self.projector.train()
 
-        # Check if terminal is interactive for progress bars
+        # Check if terminal is interactive for progress bars.
+        # Use the shared Rich console so that Progress and RichHandler
+        # coordinate on the same terminal, preventing log output from being
+        # swallowed by the live display.
         show_progress = sys.stdout.isatty()
 
-        with Progress(disable=not show_progress) as progress:
+        with Progress(console=_shared_console, disable=not show_progress) as progress:
             epoch_task = progress.add_task(
                 f"[bold cyan]Training[/bold cyan] {self.config.epochs} epochs",
                 total=self.config.epochs,

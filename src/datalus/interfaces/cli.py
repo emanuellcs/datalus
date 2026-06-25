@@ -15,8 +15,8 @@ from typing import Optional
 
 import polars as pl
 import typer
-from rich.console import Console
-from rich.logging import RichHandler
+
+from datalus._console import setup_logging
 
 from datalus.application.audit import (
     PrivacyEvaluator,
@@ -36,80 +36,43 @@ from datalus.domain.schemas import ShadowMIAConfig, TrainingConfig
 from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
 
 # ============================================================================
-# Global logging setup
+# Logger
 # ============================================================================
 
-_console = Console()
 _logger = logging.getLogger("datalus")
 
+# ============================================================================
+# Shared --verbose option default for subcommands.
+#
+# Every subcommand accepts ``--verbose`` / ``-v`` with a default of ``None``.
+# When ``None`` the callback's global setting is left untouched.  When the
+# user explicitly passes ``--verbose`` on the subcommand we re-configure
+# logging so the later flag wins.
+# ============================================================================
 
-def setup_logging(verbose: str = "WARNING") -> None:
-    """Configure global logging level based on --verbose flag.
+_VERBOSE_HELP = (
+    "Override logging level for this command. "
+    "Choices: WARNING (errors only), INFO (progress), DEBUG (detailed). "
+    "If omitted, inherits the global --verbose setting."
+)
 
-    Args:
-        verbose: Log level - "WARNING", "INFO", or "DEBUG"
-    """
-    level_map = {
-        "WARNING": logging.WARNING,
-        "INFO": logging.INFO,
-        "DEBUG": logging.DEBUG,
-    }
-    log_level = level_map.get(verbose, logging.WARNING)
 
-    # Clear existing handlers
-    _logger.handlers.clear()
-
-    # Add Rich handler for structured, colored output
-    handler = RichHandler(
-        console=_console,
-        show_time=False,
-        show_level=True,
-        rich_tracebacks=True,
-    )
-    handler.setLevel(log_level)
-    formatter = logging.Formatter("%(message)s")
-    handler.setFormatter(formatter)
-    _logger.addHandler(handler)
-    _logger.setLevel(log_level)
-
-    # Align root logger
-    logging.getLogger().setLevel(log_level)
+def _apply_verbose(verbose: str | None) -> None:
+    """Re-configure logging only when the subcommand explicitly sets --verbose."""
+    if verbose is not None:
+        setup_logging(verbose)
 
 
 # ============================================================================
 # Root application with global options
 # ============================================================================
 
-WORKFLOW_EPILOG = """
-╭─ QUICK START ───────────────────────────────────────────╮
-│                                                         │
-│ WORKFLOW EXAMPLE:                                       │
-│ ─────────────────                                       │
-│                                                         │
-│ 1. Ingest data and infer schema:                        │
-│    $ datalus ingest --input-path raw.csv \\             │
-│        --output-path prepped.parquet \\                 │
-│        --schema-path schema.json                        │
-│                                                         │
-│ 2. Train diffusion model:                               │
-│    $ datalus train --schema-path schema.json \\         │
-│        --data-path prepped.parquet \\                   │
-│        --output-dir ./checkpoints --epochs 10           │
-│                                                         │
-│ 3. Generate synthetic records:                          │
-│    $ datalus sample --checkpoint-path ./checkpoints/... │
-│        --encoder-path ./checkpoints/encoder.json \\     │
-│        --output-path synthetic.parquet --n-records 1000 │
-│                                                         │
-│ Run 'datalus <command> --help' for detailed options.    │
-│                                                         │
-╰─────────────────────────────────────────────────────────╯
-"""
-
 app = typer.Typer(
-    help="DATALUS — Synthetic tabular data generation via diffusion models.",
+    help="DATALUS \u2014 Synthetic tabular data generation via diffusion models.",
     no_args_is_help=True,
+    rich_help_panel="DATALUS",
     context_settings={"help_option_names": ["-h", "--help"]},
+    add_completion=False,
 )
 
 
@@ -118,10 +81,19 @@ def global_config(
     verbose: str = typer.Option(
         "WARNING",
         "--verbose",
-        help="Logging level: WARNING (errors only), INFO (progress), or DEBUG (detailed)",
+        "-v",
+        help="Global logging level: WARNING (errors only), INFO (progress), or DEBUG (detailed). "
+        "Choices: WARNING, INFO, DEBUG.",
+        rich_help_panel="Global Options",
     ),
 ) -> None:
-    """Configure global logging verbosity before running commands."""
+    """Configure global logging verbosity before running commands.
+
+    The --verbose flag can be placed before or after a subcommand:
+
+      datalus --verbose INFO train ...
+      datalus train --verbose INFO ...
+    """
     setup_logging(verbose)
 
 
@@ -135,6 +107,7 @@ def global_config(
     short_help="Infer schema and preprocess data to Parquet",
 )
 def ingest(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     input_path: Path = typer.Argument(..., help="Input data file or directory path"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
     schema_path: Path = typer.Option(
@@ -155,8 +128,10 @@ def ingest(
     is saved as JSON for later use in train, sample, and audit commands.
 
     Example:
-        datalus ingest --input-path raw_data.csv --output-path data.parquet
+        datalus ingest raw_data.csv data.parquet
+        datalus ingest --verbose INFO raw_data.csv data.parquet
     """
+    _apply_verbose(verbose)
     _logger.info(f"Ingesting data from {input_path}...")
     prep = ZeroShotPreprocessor(target_column=target_column)
     prep.fit_transform_to_parquet(input_path, output_path, schema_path)
@@ -174,6 +149,7 @@ def ingest(
     short_help="Train diffusion model with checkpointing",
 )
 def train(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
     data_path: Path = typer.Argument(..., help="Path to Parquet training data"),
     output_dir: Path = typer.Argument(
@@ -219,13 +195,11 @@ def train(
       - Use --save-strategy all to keep every checkpoint (default: latest - rolling)
 
     Example:
-        datalus train --schema-path schema.json --data-path data.parquet \\
-            --output-dir ./checkpoints --epochs 10 --keep-last 3 \\
-            --save-strategy best
-
-        datalus train --schema-path schema.json --data-path data.parquet \\
-            --output-dir ./checkpoints --resume-from ./checkpoints/checkpoint_latest.pt
+        datalus train schema.json data.parquet ./checkpoints --epochs 10
+        datalus train --verbose INFO schema.json data.parquet ./checkpoints
+        datalus train --verbose DEBUG schema.json data.parquet ./checkpoints --keep-last 3
     """
+    _apply_verbose(verbose)
     _logger.info(
         f"Training on {data_path} with schema {schema_path}. "
         f"Saving checkpoints to {output_dir}"
@@ -261,6 +235,7 @@ def train(
     short_help="Generate synthetic dataset ab initio",
 )
 def sample(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
@@ -289,10 +264,10 @@ def sample(
     augmentation or privacy-preserving data sharing.
 
     Example:
-        datalus sample --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --output-path synthetic.parquet --n-records 5000
+        datalus sample checkpoint.pt encoder.json output.parquet --n-records 5000
+        datalus sample --verbose INFO checkpoint.pt encoder.json output.parquet
     """
+    _apply_verbose(verbose)
     _logger.info(f"Sampling {n_records} records from checkpoint {checkpoint_path}...")
     frame = sample_records(
         checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
@@ -307,6 +282,7 @@ def sample(
     short_help="Append synthetic records to existing dataset",
 )
 def augment(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet file to augment"),
@@ -336,11 +312,10 @@ def augment(
     original. Useful for addressing data scarcity or class imbalance.
 
     Example:
-        datalus augment --checkpoint-path ./checkpoints/checkpoint_best.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --input-path original.parquet \\
-            --output-path augmented.parquet --n-records 10000
+        datalus augment checkpoint.pt encoder.json input.parquet output.parquet
+        datalus augment --verbose DEBUG checkpoint.pt encoder.json input.parquet output.parquet
     """
+    _apply_verbose(verbose)
     _logger.info(f"Augmenting {input_path} with {n_records} synthetic records...")
     frame = augment_records(
         checkpoint_path,
@@ -361,6 +336,7 @@ def augment(
     short_help="Generate records to achieve target class distribution",
 )
 def balance(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(
@@ -401,13 +377,10 @@ def balance(
     classification datasets or enforcing fairness constraints.
 
     Example:
-        datalus balance --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --input-path imbalanced.parquet \\
-            --target-column label \\
-            --target-distribution-json '{"positive": 0.5, "negative": 0.5}' \\
-            --output-path balanced.parquet
+        datalus balance checkpoint.pt encoder.json data.parquet label \\
+            '{"positive": 0.5, "negative": 0.5}' output.parquet
     """
+    _apply_verbose(verbose)
     _logger.info(
         f"Balancing {input_path} toward target distribution for {target_column}..."
     )
@@ -433,6 +406,7 @@ def balance(
     short_help="Fill null values using diffusion masks",
 )
 def inpaint(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet with null values"),
@@ -460,11 +434,10 @@ def inpaint(
     Based on RePaint masking strategy for controlled generation.
 
     Example:
-        datalus inpaint --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --input-path data_with_nulls.parquet \\
-            --output-path imputed.parquet
+        datalus inpaint checkpoint.pt encoder.json data.parquet output.parquet
+        datalus inpaint --verbose INFO checkpoint.pt encoder.json data.parquet output.parquet
     """
+    _apply_verbose(verbose)
     _logger.info(f"Inpainting null values in {input_path}...")
     frame = inpaint_records(
         checkpoint_path,
@@ -485,6 +458,7 @@ def inpaint(
     short_help="Generate records under do-style interventions",
 )
 def counterfactual(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet for context"),
@@ -511,14 +485,11 @@ def counterfactual(
     causal analysis, fairness auditing, and what-if scenarios.
 
     Example:
-        datalus counterfactual \\
-            --checkpoint-path ./checkpoints/checkpoint_latest.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --input-path original.parquet \\
-            --intervention-json '{"sensitive_attr": "protected_group"}' \\
-            --output-path counterfactuals.parquet
+        datalus counterfactual checkpoint.pt encoder.json input.parquet \\
+            '{"sensitive_attr": "protected_group"}' output.parquet
     """
-    _logger.info(f"Generating counterfactuals with interventions...")
+    _apply_verbose(verbose)
+    _logger.info("Generating counterfactuals with interventions...")
     frame = counterfactual_records(
         checkpoint_path,
         encoder_path,
@@ -542,6 +513,7 @@ def counterfactual(
     short_help="Run privacy and utility audits",
 )
 def audit(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     real_train_path: Path = typer.Argument(
         ..., help="Path to real training Parquet data"
     ),
@@ -576,14 +548,11 @@ def audit(
     and optionally runs utility metrics if a target column is provided.
 
     Example:
-        datalus audit --real-train-path real.parquet \\
-            --synthetic-path synthetic.parquet \\
-            --schema-path schema.json \\
-            --report-path audit_report.json \\
-            --target-column label \\
-            --mia-mode release
+        datalus audit real.parquet synthetic.parquet schema.json report.json
+        datalus audit --verbose DEBUG real.parquet synthetic.parquet schema.json report.json
     """
-    _logger.info(f"Running privacy and utility audits...")
+    _apply_verbose(verbose)
+    _logger.info("Running privacy and utility audits...")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     real_train = pl.read_parquet(real_train_path)
     synthetic = pl.read_parquet(synthetic_path)
@@ -608,6 +577,7 @@ def audit(
     short_help="Export EMA denoiser to ONNX format",
 )
 def export_onnx(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_dir: Path = typer.Argument(..., help="Output directory for ONNX files"),
@@ -624,11 +594,10 @@ def export_onnx(
     model size and faster CPU inference.
 
     Example:
-        datalus export-onnx --checkpoint-path ./checkpoints/checkpoint_best.pt \\
-            --encoder-path ./checkpoints/encoder.json \\
-            --output-dir ./onnx_model \\
-            --quantize
+        datalus export-onnx checkpoint.pt encoder.json ./onnx_model
+        datalus export-onnx --verbose INFO checkpoint.pt encoder.json ./onnx_model
     """
+    _apply_verbose(verbose)
     _logger.info(f"Exporting checkpoint to ONNX (quantize={quantize})...")
     export_onnx_artifacts(checkpoint_path, encoder_path, output_dir, quantize)
     typer.echo(f"ONNX artifacts written to {output_dir}")
@@ -644,6 +613,7 @@ def export_onnx(
     short_help="Serve FastAPI interface for inference",
 )
 def serve(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
     registry_path: Path = typer.Option(
         Path("artifacts"),
         "--registry-path",
@@ -665,9 +635,11 @@ def serve(
     Example:
         datalus serve --registry-path ./checkpoints --port 8000
     """
+    _apply_verbose(verbose)
     _logger.info(f"Starting FastAPI server on {host}:{port}...")
 
     import os
+
     import uvicorn
 
     os.environ["DATALUS_REGISTRY_PATH"] = str(registry_path)
@@ -684,7 +656,9 @@ def serve(
     rich_help_panel="Interfaces & Services",
     short_help="Launch interactive Streamlit interface",
 )
-def streamlit_app() -> None:
+def streamlit_app(
+    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+) -> None:
     """Launch the interactive Brazilian Portuguese Streamlit interface.
 
     The streamlit command opens a web-based UI for exploring DATALUS
@@ -693,6 +667,7 @@ def streamlit_app() -> None:
     Example:
         datalus streamlit
     """
+    _apply_verbose(verbose)
     _logger.info("Launching Streamlit interface...")
 
     import subprocess
