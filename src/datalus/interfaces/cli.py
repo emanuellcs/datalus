@@ -16,7 +16,7 @@ from typing import Optional
 import polars as pl
 import typer
 
-from datalus._console import setup_logging
+from datalus._console import VERBOSE_CHOICES, setup_logging
 
 from datalus.application.audit import (
     PrivacyEvaluator,
@@ -43,11 +43,7 @@ _logger = logging.getLogger("datalus")
 
 # ============================================================================
 # Shared --verbose option default for subcommands.
-#
-# Every subcommand accepts ``--verbose`` / ``-v`` with a default of ``None``.
-# When ``None`` the callback's global setting is left untouched.  When the
-# user explicitly passes ``--verbose`` on the subcommand we re-configure
-# logging so the later flag wins.
+# A subcommand --verbose of None inherits the global callback setting.
 # ============================================================================
 
 _VERBOSE_HELP = (
@@ -57,10 +53,63 @@ _VERBOSE_HELP = (
 )
 
 
+def _verbose_option() -> typer.Option:
+    """Build the shared per-command ``--verbose`` option.
+
+    Defaults to ``None`` so the global callback's setting is left untouched
+    unless the user explicitly passes ``--verbose`` on the subcommand.
+    """
+
+    return typer.Option(
+        None,
+        "--verbose",
+        "-v",
+        help=_VERBOSE_HELP,
+    )
+
+
 def _apply_verbose(verbose: str | None) -> None:
     """Re-configure logging only when the subcommand explicitly sets --verbose."""
     if verbose is not None:
-        setup_logging(verbose)
+        setup_logging(_validated_verbose(verbose))
+
+
+def _validated_verbose(verbose: str) -> str:
+    """Reject unknown logging levels with a clean usage error.
+
+    Typer's ``click_type=click.Choice`` wrapping currently renders invalid
+    values as developer tracebacks; validating here produces the same
+    rejection with a proper CLI usage error and exit code 2.
+    """
+
+    if verbose not in VERBOSE_CHOICES:
+        raise typer.BadParameter(
+            f"{verbose!r} is not one of {', '.join(VERBOSE_CHOICES)}."
+        )
+    return verbose
+
+
+def _resolve_checkpoint_path(checkpoint_path: Path, source: str) -> Path:
+    """Resolve a checkpoint path honoring ``--checkpoint-source``.
+
+    When ``checkpoint_path`` is a directory, ``source`` selects either
+    ``checkpoint_latest.pt`` or ``checkpoint_best.pt`` inside it. A plain file
+    path is returned unchanged regardless of ``source``.
+    """
+
+    if source not in ("latest", "best"):
+        raise typer.BadParameter(
+            f"{source!r} is not one of 'latest', 'best'."
+        )
+    if not checkpoint_path.is_dir():
+        return checkpoint_path
+    resolved = checkpoint_path / f"checkpoint_{source}.pt"
+    if not resolved.exists():
+        raise typer.BadParameter(
+            f"Checkpoint source not found: {resolved}. "
+            f"Use --checkpoint-source 'latest' or 'best'."
+        )
+    return resolved
 
 
 # ============================================================================
@@ -68,7 +117,7 @@ def _apply_verbose(verbose: str | None) -> None:
 # ============================================================================
 
 app = typer.Typer(
-    help="DATALUS \u2014 Synthetic tabular data generation via diffusion models.",
+    help="DATALUS - Synthetic tabular data generation via diffusion models.",
     no_args_is_help=True,
     rich_help_panel="DATALUS",
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -82,8 +131,7 @@ def global_config(
         "WARNING",
         "--verbose",
         "-v",
-        help="Global logging level: WARNING (errors only), INFO (progress), or DEBUG (detailed). "
-        "Choices: WARNING, INFO, DEBUG.",
+        help="Global logging level: WARNING (errors only), INFO (progress), or DEBUG (detailed).",
         rich_help_panel="Global Options",
     ),
 ) -> None:
@@ -94,7 +142,7 @@ def global_config(
       datalus --verbose INFO train ...
       datalus train --verbose INFO ...
     """
-    setup_logging(verbose)
+    setup_logging(_validated_verbose(verbose))
 
 
 # ============================================================================
@@ -107,7 +155,7 @@ def global_config(
     short_help="Infer schema and preprocess data to Parquet",
 )
 def ingest(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     input_path: Path = typer.Argument(..., help="Input data file or directory path"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
     schema_path: Path = typer.Option(
@@ -149,7 +197,7 @@ def ingest(
     short_help="Train diffusion model with checkpointing",
 )
 def train(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
     data_path: Path = typer.Argument(..., help="Path to Parquet training data"),
     output_dir: Path = typer.Argument(
@@ -174,7 +222,14 @@ def train(
         None, "--keep-last", help="Keep only N most recent checkpoints (optional)"
     ),
     save_every: int = typer.Option(
-        1, "--save-every", help="Save checkpoint every N epochs (default: 1)"
+        1,
+        "--save-every",
+        help="Save a checkpoint every N epochs (default: 1)",
+    ),
+    checkpoint_every_steps: int = typer.Option(
+        500,
+        "--checkpoint-every-steps",
+        help="Save a checkpoint every N training steps (default: 500)",
     ),
     save_strategy: str = typer.Option(
         "latest",
@@ -193,13 +248,20 @@ def train(
       - Use --keep-last N to automatically delete old checkpoints (keeps N most recent)
       - Use --save-strategy best to maintain a checkpoint_best.pt file tracking lowest loss
       - Use --save-strategy all to keep every checkpoint (default: latest - rolling)
+      - Use --save-every N to checkpoint every N epochs
+      - Use --checkpoint-every-steps N to checkpoint every N training steps
 
     Example:
         datalus train schema.json data.parquet ./checkpoints --epochs 10
         datalus train --verbose INFO schema.json data.parquet ./checkpoints
         datalus train --verbose DEBUG schema.json data.parquet ./checkpoints --keep-last 3
+        datalus train schema.json data.parquet ./checkpoints --save-every 2 --checkpoint-every-steps 1000
     """
     _apply_verbose(verbose)
+    if save_strategy not in ("all", "latest", "best"):
+        raise typer.BadParameter(
+            f"{save_strategy!r} is not one of 'all', 'latest', 'best'."
+        )
     _logger.info(
         f"Training on {data_path} with schema {schema_path}. "
         f"Saving checkpoints to {output_dir}"
@@ -215,6 +277,7 @@ def train(
             gpu=gpu,
             keep_last=keep_last,
             save_every=save_every,
+            checkpoint_every_steps=checkpoint_every_steps,
             save_strategy=save_strategy,
         )
     )
@@ -235,7 +298,7 @@ def train(
     short_help="Generate synthetic dataset ab initio",
 )
 def sample(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
@@ -254,7 +317,7 @@ def sample(
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
-        help="Use 'latest' or 'best' checkpoint (default: latest)",
+        help="If checkpoint_path is a directory, use 'latest' or 'best' checkpoint within it",
     ),
 ) -> None:
     """Generate a new synthetic dataset from learned distributions.
@@ -266,8 +329,10 @@ def sample(
     Example:
         datalus sample checkpoint.pt encoder.json output.parquet --n-records 5000
         datalus sample --verbose INFO checkpoint.pt encoder.json output.parquet
+        datalus sample ./checkpoints encoder.json output.parquet --checkpoint-source best
     """
     _apply_verbose(verbose)
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(f"Sampling {n_records} records from checkpoint {checkpoint_path}...")
     frame = sample_records(
         checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
@@ -282,7 +347,7 @@ def sample(
     short_help="Append synthetic records to existing dataset",
 )
 def augment(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet file to augment"),
@@ -302,7 +367,7 @@ def augment(
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
-        help="Use 'latest' or 'best' checkpoint (default: latest)",
+        help="If checkpoint_path is a directory, use 'latest' or 'best' checkpoint within it",
     ),
 ) -> None:
     """Append synthetic records to scale up a small dataset.
@@ -314,8 +379,10 @@ def augment(
     Example:
         datalus augment checkpoint.pt encoder.json input.parquet output.parquet
         datalus augment --verbose DEBUG checkpoint.pt encoder.json input.parquet output.parquet
+        datalus augment ./checkpoints encoder.json input.parquet output.parquet --checkpoint-source best
     """
     _apply_verbose(verbose)
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(f"Augmenting {input_path} with {n_records} synthetic records...")
     frame = augment_records(
         checkpoint_path,
@@ -336,7 +403,7 @@ def augment(
     short_help="Generate records to achieve target class distribution",
 )
 def balance(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(
@@ -347,7 +414,7 @@ def balance(
         ..., help="Target column name for class labels"
     ),
     target_distribution_json: str = typer.Argument(
-        ..., help='Target distribution as JSON, e.g., \'{"A": 0.5, "B": 0.5}\''
+        ..., help='Target distribution as absolute class counts, e.g., \'{"A": 5000, "B": 5000}\''
     ),
     ddim_steps: int = typer.Option(
         50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
@@ -367,7 +434,7 @@ def balance(
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
-        help="Use 'latest' or 'best' checkpoint (default: latest)",
+        help="If checkpoint_path is a directory, use 'latest' or 'best' checkpoint within it",
     ),
 ) -> None:
     """Generate records to approach a requested class distribution.
@@ -378,9 +445,12 @@ def balance(
 
     Example:
         datalus balance checkpoint.pt encoder.json data.parquet label \\
-            '{"positive": 0.5, "negative": 0.5}' output.parquet
+            '{"positive": 5000, "negative": 5000}' output.parquet
+        datalus balance ./checkpoints encoder.json data.parquet label \\
+            '{"positive": 5000, "negative": 5000}' output.parquet --checkpoint-source best
     """
     _apply_verbose(verbose)
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(
         f"Balancing {input_path} toward target distribution for {target_column}..."
     )
@@ -406,7 +476,7 @@ def balance(
     short_help="Fill null values using diffusion masks",
 )
 def inpaint(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet with null values"),
@@ -424,7 +494,7 @@ def inpaint(
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
-        help="Use 'latest' or 'best' checkpoint (default: latest)",
+        help="If checkpoint_path is a directory, use 'latest' or 'best' checkpoint within it",
     ),
 ) -> None:
     """Fill null values in tabular records using RePaint-style masks.
@@ -436,8 +506,10 @@ def inpaint(
     Example:
         datalus inpaint checkpoint.pt encoder.json data.parquet output.parquet
         datalus inpaint --verbose INFO checkpoint.pt encoder.json data.parquet output.parquet
+        datalus inpaint ./checkpoints encoder.json data.parquet output.parquet --checkpoint-source best
     """
     _apply_verbose(verbose)
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(f"Inpainting null values in {input_path}...")
     frame = inpaint_records(
         checkpoint_path,
@@ -458,7 +530,7 @@ def inpaint(
     short_help="Generate records under do-style interventions",
 )
 def counterfactual(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet for context"),
@@ -474,7 +546,7 @@ def counterfactual(
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
-        help="Use 'latest' or 'best' checkpoint (default: latest)",
+        help="If checkpoint_path is a directory, use 'latest' or 'best' checkpoint within it",
     ),
 ) -> None:
     """Generate records under explicit do-style column interventions.
@@ -487,8 +559,11 @@ def counterfactual(
     Example:
         datalus counterfactual checkpoint.pt encoder.json input.parquet \\
             '{"sensitive_attr": "protected_group"}' output.parquet
+        datalus counterfactual ./checkpoints encoder.json input.parquet \\
+            '{"sensitive_attr": "protected_group"}' output.parquet --checkpoint-source best
     """
     _apply_verbose(verbose)
+    checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info("Generating counterfactuals with interventions...")
     frame = counterfactual_records(
         checkpoint_path,
@@ -513,7 +588,7 @@ def counterfactual(
     short_help="Run privacy and utility audits",
 )
 def audit(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     real_train_path: Path = typer.Argument(
         ..., help="Path to real training Parquet data"
     ),
@@ -533,7 +608,8 @@ def audit(
     mia_mode: str = typer.Option(
         "release",
         "--mia-mode",
-        help="Privacy audit mode: 'release' (less strict) or 'strict'",
+        help="Privacy audit mode: 'release' (uncapped) or 'ci_lite' (bounded regression run). "
+        "Use 'ci_lite' for fast CI checks; run 'release' for the full privacy evidence.",
     ),
     max_audit_rows: Optional[int] = typer.Option(
         None,
@@ -552,6 +628,10 @@ def audit(
         datalus audit --verbose DEBUG real.parquet synthetic.parquet schema.json report.json
     """
     _apply_verbose(verbose)
+    if mia_mode not in ("release", "ci_lite"):
+        raise typer.BadParameter(
+            f"{mia_mode!r} is not one of 'release', 'ci_lite'."
+        )
     _logger.info("Running privacy and utility audits...")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     real_train = pl.read_parquet(real_train_path)
@@ -577,7 +657,7 @@ def audit(
     short_help="Export EMA denoiser to ONNX format",
 )
 def export_onnx(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_dir: Path = typer.Argument(..., help="Output directory for ONNX files"),
@@ -613,7 +693,7 @@ def export_onnx(
     short_help="Serve FastAPI interface for inference",
 )
 def serve(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
     registry_path: Path = typer.Option(
         Path("artifacts"),
         "--registry-path",
@@ -653,11 +733,12 @@ def serve(
 
 
 @app.command(
+    name="streamlit",
     rich_help_panel="Interfaces & Services",
     short_help="Launch interactive Streamlit interface",
 )
 def streamlit_app(
-    verbose: Optional[str] = typer.Option(None, "--verbose", "-v", help=_VERBOSE_HELP),
+    verbose: Optional[str] = _verbose_option(),
 ) -> None:
     """Launch the interactive Brazilian Portuguese Streamlit interface.
 

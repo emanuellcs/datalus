@@ -1,3 +1,5 @@
+"""Tests for lazy preprocessing and reversible tabular encoding."""
+
 import json
 
 import numpy as np
@@ -8,6 +10,8 @@ from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
 
 
 def test_lazy_preprocessing_and_reversible_encoding(tmp_path):
+    """Ingest, encode, and decode a frame without losing data."""
+
     raw = tmp_path / "raw.csv"
     processed = tmp_path / "processed.parquet"
     schema_path = tmp_path / "schema_config.json"

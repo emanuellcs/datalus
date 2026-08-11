@@ -32,6 +32,8 @@ class NumericQuantileTransform:
     def fit(
         cls, column: str, values: np.ndarray, n_quantiles: int = 1_000
     ) -> "NumericQuantileTransform":
+        """Fit monotone quantiles and a fill value for one numeric column."""
+
         clean = values.astype(np.float64)
         clean = clean[np.isfinite(clean)]
         if clean.size == 0:
@@ -48,16 +50,22 @@ class NumericQuantileTransform:
         )
 
     def transform(self, values: np.ndarray) -> np.ndarray:
+        """Map raw values to the [-1, 1] normalized interval."""
+
         arr = values.astype(np.float64)
         arr = np.where(np.isfinite(arr), arr, self.fill_value)
         encoded = np.interp(arr, self.quantiles, self.references, left=0.0, right=1.0)
         return (encoded * 2.0 - 1.0).astype(np.float32)
 
     def inverse(self, values: np.ndarray) -> np.ndarray:
+        """Map normalized values back to the original numeric scale."""
+
         clipped = np.clip((values.astype(np.float64) + 1.0) / 2.0, 0.0, 1.0)
         return np.interp(clipped, self.references, self.quantiles).astype(np.float32)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the transform for artifact persistence."""
+
         return {
             "column": self.column,
             "quantiles": self.quantiles,
@@ -67,6 +75,8 @@ class NumericQuantileTransform:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "NumericQuantileTransform":
+        """Rebuild a transform from a serialized payload."""
+
         return cls(**payload)
 
 
@@ -82,6 +92,8 @@ class CategoricalVocabulary:
 
     @classmethod
     def fit(cls, column: str, values: np.ndarray) -> "CategoricalVocabulary":
+        """Collect sorted categories and their observed frequencies."""
+
         normalized = [_normalize_category(value) for value in values]
         categories = sorted(
             {value for value in normalized if value not in {"__NULL__", "__UNKNOWN__"}}
@@ -93,23 +105,26 @@ class CategoricalVocabulary:
 
     @property
     def vocab(self) -> dict[str, int]:
+        """Return the token-to-index mapping including the sentinels."""
+
         tokens = [self.unknown_token, self.null_token, *self.categories]
         return {token: idx for idx, token in enumerate(tokens)}
 
     @property
     def inverse_vocab(self) -> dict[int, str]:
+        """Return the index-to-token reverse mapping."""
+
         return {idx: token for token, idx in self.vocab.items()}
 
     @property
     def size(self) -> int:
+        """Return the vocabulary size including the two sentinels."""
+
         return len(self.categories) + 2
 
     def transform(self, values: np.ndarray) -> np.ndarray:
         vocab = self.vocab
-        # Observed rare categories are deliberately preserved as first-class
-        # tokens. Only values that were never present during fitting map to the
-        # unknown sentinel, which prevents long-tail government classes from
-        # being erased by the encoder.
+        # Keep fitted categories as distinct tokens; only unseen values map to the sentinel.
         return np.array(
             [
                 vocab.get(_normalize_category(value), vocab[self.unknown_token])
@@ -119,6 +134,8 @@ class CategoricalVocabulary:
         )
 
     def inverse(self, values: np.ndarray) -> list[str | None]:
+        """Map category indices back to tokens, decoding null as None."""
+
         inverse_vocab = self.inverse_vocab
         decoded: list[str | None] = []
         for value in values.astype(np.int64):
@@ -137,10 +154,14 @@ class CategoricalVocabulary:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "CategoricalVocabulary":
+        """Rebuild a vocabulary from a serialized payload."""
+
         return cls(**payload)
 
 
 def _normalize_category(value: Any) -> str:
+    """Return a stable string token for a raw category value."""
+
     if value is None:
         return "__NULL__"
     try:
@@ -160,12 +181,16 @@ class TabularEncoder:
         numeric_transforms: dict[str, NumericQuantileTransform] | None = None,
         categorical_vocabs: dict[str, CategoricalVocabulary] | None = None,
     ) -> None:
+        """Initialize the encoder with schema metadata and optional fitted transforms."""
+
         self.schema_metadata = schema_metadata
         self.numeric_transforms = numeric_transforms or {}
         self.categorical_vocabs = categorical_vocabs or {}
 
     @property
     def active_schema(self) -> dict[str, dict[str, Any]]:
+        """Return schema entries that are not marked for dropping."""
+
         return {
             column: meta
             for column, meta in self.schema_metadata.items()
@@ -175,6 +200,8 @@ class TabularEncoder:
 
     @property
     def numerical_columns(self) -> list[str]:
+        """Return the retained numerical column names."""
+
         return [
             column
             for column, meta in self.active_schema.items()
@@ -183,6 +210,8 @@ class TabularEncoder:
 
     @property
     def categorical_columns(self) -> list[str]:
+        """Return the retained categorical and boolean column names."""
+
         return [
             column
             for column, meta in self.active_schema.items()
@@ -191,6 +220,8 @@ class TabularEncoder:
         ]
 
     def fit(self, frame: pl.DataFrame) -> "TabularEncoder":
+        """Fit numeric transforms and categorical vocabularies on a frame."""
+
         for column in self.numerical_columns:
             values = frame.get_column(column).cast(pl.Float64, strict=False).to_numpy()
             self.numeric_transforms[column] = NumericQuantileTransform.fit(
@@ -219,6 +250,8 @@ class TabularEncoder:
         return self
 
     def transform(self, frame: pl.DataFrame) -> EncodedBatch:
+        """Encode a frame into stacked numerical and categorical arrays."""
+
         x_num = None
         x_cat = None
         if self.numerical_columns:
@@ -244,6 +277,8 @@ class TabularEncoder:
         x_num: np.ndarray | None,
         x_cat: np.ndarray | None,
     ) -> pl.DataFrame:
+        """Decode numerical and categorical arrays back into a DataFrame."""
+
         data: dict[str, Any] = {}
         if x_num is not None:
             for idx, column in enumerate(self.numerical_columns):
@@ -267,6 +302,8 @@ class TabularEncoder:
         }
 
     def save(self, path: str | Path) -> None:
+        """Write the encoder to a JSON artifact file."""
+
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
@@ -275,6 +312,8 @@ class TabularEncoder:
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "TabularEncoder":
+        """Rebuild an encoder from a serialized payload."""
+
         return cls(
             schema_metadata=payload["schema_metadata"],
             numeric_transforms={
@@ -289,4 +328,6 @@ class TabularEncoder:
 
     @classmethod
     def load(cls, path: str | Path) -> "TabularEncoder":
+        """Load an encoder from a JSON artifact file."""
+
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))

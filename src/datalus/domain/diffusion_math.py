@@ -23,6 +23,7 @@ def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> list[float]:
     first = alpha_bar[0]
     alpha_bar = [value / first for value in alpha_bar]
     betas = [1.0 - alpha_bar[idx + 1] / alpha_bar[idx] for idx in range(timesteps)]
+    # Clip betas to keep the schedule numerically stable.
     return [min(0.999, max(1e-5, beta)) for beta in betas]
 
 
@@ -48,6 +49,7 @@ def make_ddim_timesteps(num_train_timesteps: int, ddim_steps: int) -> list[int]:
     values = [
         round(idx * (num_train_timesteps - 1) / (steps - 1)) for idx in range(steps)
     ]
+    # Descend from the final timestep and remove rounding duplicates.
     descending = list(reversed(values))
     deduped: list[int] = []
     for value in descending:
@@ -71,6 +73,7 @@ def make_repaint_schedule(
         step: jump_n_sample - 1
         for step in range(0, max(num_inference_steps - jump_length, 0), jump_length)
     }
+    # Walk down the timesteps, jumping forward where the schedule demands it.
     sequence: list[int] = []
     step = num_inference_steps
     while step >= 1:

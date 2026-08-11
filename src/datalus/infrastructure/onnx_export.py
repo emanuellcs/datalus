@@ -15,10 +15,14 @@ class ONNXDenoiserWrapper(nn.Module):
     """Export-friendly wrapper around the denoiser."""
 
     def __init__(self, denoiser: nn.Module) -> None:
+        """Wrap a denoiser with a fixed null context for ONNX tracing."""
+
         super().__init__()
         self.denoiser = denoiser
 
     def forward(self, x_t: torch.Tensor, timestep: torch.Tensor) -> torch.Tensor:
+        """Predict noise with no conditioning context."""
+
         return self.denoiser(x_t, timestep, None)
 
 
@@ -126,9 +130,7 @@ def validate_int8_cfg_parity(
     }
     int8 = int8_session.run(None, feeds_int8)[0]
 
-    # CFG computes eps_uncond + w * (eps_cond - eps_uncond). Export artifacts may
-    # not include a context input, so the parity guard measures the worst-case
-    # amplification of raw epsilon drift under the same guidance scale.
+    # CFG amplifies epsilon drift by the guidance scale, so measure the worst-case amplified difference.
     amplified_abs = float(np.max(np.abs((fp32 - int8) * cfg_scale)))
     categorical_agreement: float | None = None
     if categorical_slices:
@@ -148,6 +150,8 @@ def validate_int8_cfg_parity(
 
 
 def write_manifest(path: str | Path, payload: dict[str, Any]) -> None:
+    """Write a JSON manifest for the exported artifacts."""
+
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

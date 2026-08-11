@@ -24,22 +24,22 @@ VERBOSE_LEVEL_MAP: dict[str, int] = {
     "DEBUG": logging.DEBUG,
 }
 
-# Singleton console shared by RichHandler, Progress, and any other Rich component.
+# Single console shared by RichHandler, Progress, and other Rich components.
 console = Console()
 
 _logger = logging.getLogger("datalus")
 
 
 def setup_logging(verbose: str = "WARNING") -> None:
-    """Configure global logging level based on --verbose flag.
+    """Configure the global logging level and Rich handler for DATALUS.
 
     Args:
-        verbose: Log level - "WARNING", "errors only"), "INFO" (progress),
+        verbose: Log level - "WARNING" (errors only), "INFO" (progress),
                  or "DEBUG" (detailed).
     """
     log_level = VERBOSE_LEVEL_MAP.get(verbose, logging.WARNING)
 
-    # Clear existing handlers to avoid duplicates on repeated calls.
+    # Replace existing handlers so repeated setup calls do not duplicate them.
     _logger.handlers.clear()
 
     handler = RichHandler(
@@ -53,5 +53,5 @@ def setup_logging(verbose: str = "WARNING") -> None:
     _logger.addHandler(handler)
     _logger.setLevel(log_level)
 
-    # Align root logger so third-party warnings at lower levels are silenced.
+    # Align the root logger so lower-level third-party logs stay quiet.
     logging.getLogger().setLevel(log_level)

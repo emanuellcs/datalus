@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DomainModel(BaseModel):
-    """Base schema configured for immutable, explicit domain data."""
+    """Base schema that forbids extra attributes and exposes JSON serialization."""
 
     model_config = ConfigDict(extra="forbid", frozen=False)
 

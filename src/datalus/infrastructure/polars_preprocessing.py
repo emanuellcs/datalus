@@ -47,6 +47,8 @@ class ZeroShotPreprocessor:
         rare_category_threshold: int = 5,
         null_values: Iterable[str] | None = None,
     ) -> None:
+        """Configure topology inference thresholds and schema storage."""
+
         self.high_cardinality_threshold = high_cardinality_threshold
         self.sample_size = sample_size
         self.target_column = target_column
@@ -160,6 +162,8 @@ class ZeroShotPreprocessor:
         return instance
 
     def _infer_column_topology(self, series: pl.Series) -> ColumnProfile:
+        """Classify one column and choose its encoding strategy or drop policy."""
+
         name = series.name
         dtype = str(series.dtype)
         total_count = len(series)
@@ -185,11 +189,7 @@ class ZeroShotPreprocessor:
             retained: bool = True,
             reason: str | None = None,
         ):
-            # Category frequency metadata is part of the domain profile because
-            # long-tail categories in public data often represent rare diseases,
-            # small municipalities, or infrequent public services. DATALUS keeps
-            # those observed categories addressable instead of collapsing them
-            # into an OOV bucket during training.
+            # Keep observed categories addressable instead of OOV-collapsing them.
             return ColumnProfile(
                 column_name=name,
                 original_dtype=dtype,
@@ -258,12 +258,16 @@ class ZeroShotPreprocessor:
 
     @staticmethod
     def _looks_like_identifier(name: str, cardinality: int, total_count: int) -> bool:
+        """Return True when a column resembles a record-level identifier."""
+
         if IDENTIFIER_NAME_RE.search(name):
             return True
         return total_count > 1_000 and cardinality / max(total_count, 1) > 0.98
 
     @staticmethod
     def _average_string_length(series: pl.Series) -> float:
+        """Return the mean character length of a bounded string sample."""
+
         values = series.drop_nulls().head(2_000).cast(pl.String)
         if values.is_empty():
             return 0.0
@@ -294,9 +298,7 @@ def _detect_csv_separator(path: Path) -> str:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         return dialect.delimiter
     except Exception:
-        # Brazilian government CSV files commonly use semicolons because commas
-        # appear as decimal separators in spreadsheets; comma remains the safe
-        # fallback when sniffing cannot prove otherwise.
+        # Semicolons are the common delimiter in Brazilian spreadsheet exports.
         return ";"
 
 

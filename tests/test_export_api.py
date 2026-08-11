@@ -1,3 +1,5 @@
+"""Tests for the artifact API and ONNX export parity guards."""
+
 import json
 
 import pytest
@@ -14,6 +16,8 @@ from datalus.interfaces.api import create_app
 
 
 def test_artifact_api_serves_manifest(tmp_path):
+    """The API serves a domain manifest as JSON."""
+
     domain = tmp_path / "demo"
     domain.mkdir()
     (domain / "manifest.json").write_text(
@@ -27,6 +31,8 @@ def test_artifact_api_serves_manifest(tmp_path):
 
 
 def test_artifact_api_rejects_domain_path_traversal(tmp_path):
+    """The API rejects registry paths that escape the domain root."""
+
     app = create_app(tmp_path)
     client = TestClient(app)
     response = client.get("/artifacts/../manifest")
@@ -34,6 +40,8 @@ def test_artifact_api_rejects_domain_path_traversal(tmp_path):
 
 
 def test_int8_cfg_parity_guard_runs_on_small_onnx_export(tmp_path):
+    """The INT8 parity guard reports CFG-amplified drift on a small export."""
+
     pytest.importorskip("onnxruntime")
     torch.manual_seed(0)
     denoiser = TabularDenoiserMLP(d_in=3, hidden_dims=(8, 8), dim_t=8).eval()

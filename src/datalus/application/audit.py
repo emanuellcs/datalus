@@ -37,6 +37,8 @@ class PrivacyEvaluator:
         schema_metadata: dict[str, Any],
         real_holdout: pl.DataFrame | None = None,
     ) -> None:
+        """Restrict inputs to retained, non-target columns shared by both frames."""
+
         self.real_train = real_train
         self.synthetic = synthetic
         self.real_holdout = real_holdout
@@ -57,6 +59,8 @@ class PrivacyEvaluator:
         self.preprocessor = self._build_preprocessor()
 
     def _build_preprocessor(self) -> ColumnTransformer:
+        """Build a scaler and one-hot encoder keyed by the schema topology."""
+
         num_cols = []
         cat_cols = []
         for column in self.columns:
@@ -80,6 +84,8 @@ class PrivacyEvaluator:
     def _project(
         self, fit_frame: pl.DataFrame, *frames: pl.DataFrame
     ) -> list[np.ndarray]:
+        """Fit the preprocessor and transform the given frames to arrays."""
+
         fit_pd = fit_frame.to_pandas()
         self.preprocessor.fit(fit_pd)
         return [
@@ -90,6 +96,8 @@ class PrivacyEvaluator:
     def compute_dcr(
         self, thresholds: PrivacyThresholds | None = None
     ) -> dict[str, Any]:
+        """Compute the Distance to Closest Record metric and its verdict."""
+
         threshold_cfg = thresholds or PrivacyThresholds()
         x_real, x_synth = self._project(
             self.real_train, self.real_train, self.synthetic
@@ -216,6 +224,8 @@ class PrivacyEvaluator:
         generated: pl.DataFrame,
         config: ShadowMIAConfig,
     ) -> np.ndarray:
+        """Build neighbor-distance features for membership attack training."""
+
         fit_frame = pl.concat(
             [candidates.select(self.columns), generated.select(self.columns)],
             how="vertical_relaxed",
@@ -242,6 +252,8 @@ class PrivacyEvaluator:
         thresholds: PrivacyThresholds | None = None,
         config: ShadowMIAConfig | None = None,
     ) -> dict[str, Any]:
+        """Run DCR and Shadow MIA and combine them into one privacy verdict."""
+
         dcr = self.compute_dcr(thresholds)
         mia = self.shadow_membership_inference(
             synthetic_provider, config=config, thresholds=thresholds
@@ -271,6 +283,8 @@ class UtilityEvaluator:
         target_column: str,
         random_state: int = 42,
     ) -> None:
+        """Store real and synthetic frames with their target column."""
+
         self.real_df = real_df
         self.synthetic_df = synthetic_df
         self.schema_metadata = schema_metadata
@@ -278,6 +292,8 @@ class UtilityEvaluator:
         self.random_state = random_state
 
     def run_audit(self, approval_threshold: float = 0.90) -> dict[str, Any]:
+        """Run TRTR and TSTR evaluations and return the utility verdict."""
+
         real_pd = self.real_df.to_pandas()
         synth_pd = self.synthetic_df.to_pandas()
         categorical = [
@@ -324,6 +340,8 @@ class UtilityEvaluator:
         }
 
     def _fit_eval(self, x_train, y_train, x_test, y_test) -> dict[str, float]:
+        """Fit a classifier and return AUC and F1 on the test split."""
+
         model = build_tabular_classifier(random_state=self.random_state)
         model.fit(x_train, y_train)
         if hasattr(model, "predict_proba"):
@@ -373,17 +391,21 @@ def build_tabular_classifier(random_state: int = 42):
 
 
 def _numeric_selector(frame):
+    """Return the numeric column names of a pandas frame."""
+
     return list(frame.select_dtypes(include=[np.number]).columns)
 
 
 def _categorical_selector(frame):
+    """Return the non-numeric column names of a pandas frame."""
+
     return list(frame.select_dtypes(exclude=[np.number]).columns)
 
 
 def _bootstrap_shadow_generator(
     frame: pl.DataFrame, n_records: int, rng: np.random.Generator
 ) -> pl.DataFrame:
-    """Small fallback shadow generator used only when no trained generator is supplied."""
+    """Generate shadow samples by bootstrapping and jittering the real frame."""
 
     indices = rng.integers(0, len(frame), size=n_records)
     sample = frame[indices]
@@ -433,10 +455,14 @@ def _bounded_frame(
 
 
 def safe_ratio(numerator: float, denominator: float) -> float:
+    """Return the ratio, or 0.0 when the denominator is effectively zero."""
+
     return float(numerator / denominator) if abs(denominator) > 1e-12 else 0.0
 
 
 def write_audit_report(path: str | Path, report: dict[str, Any]) -> None:
+    """Write the audit report to a JSON file."""
+
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(

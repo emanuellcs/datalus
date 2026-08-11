@@ -91,17 +91,14 @@ def prune_checkpoints(
     if preserve_files is None:
         preserve_files = ["checkpoint_latest.pt", "checkpoint_best.pt"]
 
-    # Find all step-based checkpoint files, excluding preserved files
-    checkpoint_files = sorted(
-        [
-            f
-            for f in checkpoint_dir.glob("checkpoint_step_*.pt")
-            if f.name not in preserve_files
-        ],
-        key=lambda f: f.stat().st_mtime,  # Sort by modification time (oldest first)
-    )
+    # Sort by the step number in the filename so retention survives mtime ties.
+    checkpoint_files = [
+        f
+        for f in checkpoint_dir.glob("checkpoint_step_*.pt")
+        if f.name not in preserve_files
+    ]
+    checkpoint_files.sort(key=_checkpoint_step)
 
-    # Delete oldest files if we exceed keep_last
     if len(checkpoint_files) > keep_last:
         for old_checkpoint in checkpoint_files[:-keep_last]:
             try:
@@ -128,7 +125,6 @@ def update_best_checkpoint(
     checkpoint_dir = Path(checkpoint_dir)
     best_path = checkpoint_dir / best_checkpoint_name
 
-    # Load best checkpoint if it exists, extract its loss
     if best_path.exists():
         try:
             best_checkpoint = load_checkpoint(best_path, map_location="cpu")
@@ -139,10 +135,28 @@ def update_best_checkpoint(
     else:
         best_loss = float("inf")
 
-    # Update best if current is better
     if current_loss < best_loss:
         try:
             shutil.copy2(current_checkpoint_path, best_path)
             logger.info(f"New best checkpoint: loss={current_loss:.6f}")
         except OSError as e:
             logger.warning(f"Failed to update best checkpoint: {e}")
+
+
+def _checkpoint_step(path: Path) -> tuple[int, Path]:
+    """Return a sort key from the step number in a checkpoint filename.
+
+    Unrecognized names sort first by name so unrelated files still order
+    deterministically.
+    """
+
+    step = 0
+    name = path.name
+    if name.startswith("checkpoint_step_") and name.endswith(".pt"):
+        try:
+            step = int(name[len("checkpoint_step_") : -len(".pt")])
+        except ValueError:
+            step = 0
+    if step == 0:
+        return step, Path(name)
+    return step, Path(f"{step:08d}")

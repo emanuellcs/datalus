@@ -45,6 +45,8 @@ class DatalusTrainer:
     """Training orchestrator with deterministic checkpointing and AMP."""
 
     def __init__(self, config: TrainingConfig) -> None:
+        """Build the trainer and prepare models, optimizer, and scheduler."""
+
         if config.gpu is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = config.gpu
 
@@ -114,6 +116,8 @@ class DatalusTrainer:
         self.loss_history: list[float] = []
 
     def _fit_encoder(self) -> TabularEncoder:
+        """Fit a reversible encoder on a bounded sample of the training data."""
+
         sample = (
             pl.scan_parquet(self.config.data_path)
             .head(self.config.max_encoder_fit_rows)
@@ -123,6 +127,8 @@ class DatalusTrainer:
         return encoder.fit(sample)
 
     def resume(self, checkpoint_path: str | Path) -> None:
+        """Restore model, optimizer, scheduler, and RNG state from a checkpoint."""
+
         checkpoint = load_checkpoint(checkpoint_path, map_location=self.device)
         getattr(self.diffusion, "module", self.diffusion).load_state_dict(
             checkpoint["diffusion_state"]
@@ -141,13 +147,12 @@ class DatalusTrainer:
         restore_rng_state(checkpoint["rng_state"])
 
     def train(self, max_steps: int | None = None) -> Path:
+        """Run the full training loop and return the final checkpoint path."""
+
         self.diffusion.train()
         self.projector.train()
 
-        # Check if terminal is interactive for progress bars.
-        # Use the shared Rich console so that Progress and RichHandler
-        # coordinate on the same terminal, preventing log output from being
-        # swallowed by the live display.
+        # Detect an interactive terminal for live progress rendering.
         show_progress = sys.stdout.isatty()
 
         with Progress(console=_shared_console, disable=not show_progress) as progress:
@@ -182,12 +187,16 @@ class DatalusTrainer:
                         f"lr={self.optimizer.param_groups[0]['lr']:.2e}"
                     )
 
-                    # Save checkpoint at configured frequency
-                    if (
+                    # Save on the epoch cadence, the step cadence, or both.
+                    epoch_cadence = (
                         self.config.save_every > 0
                         and epoch % self.config.save_every == 0
+                    )
+                    step_cadence = (
+                        self.config.checkpoint_every_steps > 0
                         and self.global_step % self.config.checkpoint_every_steps == 0
-                    ):
+                    )
+                    if epoch_cadence or step_cadence:
                         self.save_checkpoint(epoch, batch_index + 1, loss_value)
                         logger.info(
                             f"Checkpoint saved at step {self.global_step}, "
@@ -214,6 +223,12 @@ class DatalusTrainer:
 
             self.start_batch_index = 0
 
+        if not self.loss_history:
+            raise RuntimeError(
+                "No training batches were processed. Check that the dataset is "
+                "not empty and that the batch size does not exceed the row count."
+            )
+
         logger.info(
             f"Training complete. Final loss: {self.loss_history[-1]:.6f}. "
             f"Total steps: {self.global_step}"
@@ -226,6 +241,8 @@ class DatalusTrainer:
         )
 
     def _train_batch(self, frame: pl.DataFrame) -> float:
+        """Train on one batch and return the detached scalar loss."""
+
         encoded = self.encoder.transform(frame)
         x_num = (
             torch.from_numpy(encoded.x_num).to(self.device, non_blocking=True)
@@ -262,6 +279,8 @@ class DatalusTrainer:
         loss: float,
         name: str | None = None,
     ) -> Path:
+        """Write a checkpoint and maintain latest, best, and retention files."""
+
         checkpoint_name = name or f"checkpoint_step_{self.global_step:08d}.pt"
         path = self.checkpoint_dir / checkpoint_name
         payload = {
@@ -286,16 +305,13 @@ class DatalusTrainer:
         }
         save_checkpoint(path, payload)
 
-        # Update latest.pt (always kept)
         latest = self.checkpoint_dir / "checkpoint_latest.pt"
         if latest != path:
             save_checkpoint(latest, payload)
 
-        # Update best.pt if using best strategy
         if self.config.save_strategy == "best":
             update_best_checkpoint(self.checkpoint_dir, loss, path)
 
-        # Prune old checkpoints if retention limit is set
         if self.config.keep_last is not None:
             prune_checkpoints(self.checkpoint_dir, self.config.keep_last)
 
@@ -303,5 +319,7 @@ class DatalusTrainer:
 
 
 def _config_hash(config: dict[str, Any]) -> str:
+    """Return a stable SHA-256 hash of the serialized training config."""
+
     serialized = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()
