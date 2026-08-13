@@ -98,9 +98,7 @@ def _resolve_checkpoint_path(checkpoint_path: Path, source: str) -> Path:
     """
 
     if source not in ("latest", "best"):
-        raise typer.BadParameter(
-            f"{source!r} is not one of 'latest', 'best'."
-        )
+        raise typer.BadParameter(f"{source!r} is not one of 'latest', 'best'.")
     if not checkpoint_path.is_dir():
         return checkpoint_path
     resolved = checkpoint_path / f"checkpoint_{source}.pt"
@@ -414,7 +412,8 @@ def balance(
         ..., help="Target column name for class labels"
     ),
     target_distribution_json: str = typer.Argument(
-        ..., help='Target distribution as absolute class counts, e.g., \'{"A": 5000, "B": 5000}\''
+        ...,
+        help='Target distribution as absolute class counts, e.g., \'{"A": 5000, "B": 5000}\'',
     ),
     ddim_steps: int = typer.Option(
         50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
@@ -629,9 +628,7 @@ def audit(
     """
     _apply_verbose(verbose)
     if mia_mode not in ("release", "ci_lite"):
-        raise typer.BadParameter(
-            f"{mia_mode!r} is not one of 'release', 'ci_lite'."
-        )
+        raise typer.BadParameter(f"{mia_mode!r} is not one of 'release', 'ci_lite'.")
     _logger.info("Running privacy and utility audits...")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     real_train = pl.read_parquet(real_train_path)

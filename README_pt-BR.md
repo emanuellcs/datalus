@@ -496,7 +496,8 @@ O Colab T4 é adequado para prova de conceito, mas deve ser tratado como ambient
 
 ```python
 from google.colab import drive
-drive.mount('/content/drive')
+
+drive.mount("/content/drive")
 ```
 
 Layout recomendado:

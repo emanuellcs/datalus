@@ -530,7 +530,8 @@ Colab T4 sessions are useful for proof-of-concept training but should be treated
 
 ```python
 from google.colab import drive
-drive.mount('/content/drive')
+
+drive.mount("/content/drive")
 ```
 
 Recommended Drive layout:

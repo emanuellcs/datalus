@@ -18,6 +18,7 @@ ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 def _strip_ansi(text: str) -> str:
     return ANSI_ESCAPE.sub("", text)
 
+
 runner = CliRunner()
 
 EXPECTED_COMMANDS = {
@@ -77,9 +78,7 @@ def test_valid_verbose_after_subcommand_accepted():
 
 
 def test_invalid_mia_mode_is_rejected():
-    result = runner.invoke(
-        app, ["audit", "--mia-mode", "strict", "a", "b", "c", "d"]
-    )
+    result = runner.invoke(app, ["audit", "--mia-mode", "strict", "a", "b", "c", "d"])
     assert result.exit_code == 2
     assert "not one of 'release', 'ci_lite'" in result.output
 
@@ -105,9 +104,7 @@ def test_valid_mia_mode_release_proceeds_to_io(tmp_path):
 
 
 def test_invalid_save_strategy_is_rejected():
-    result = runner.invoke(
-        app, ["train", "--save-strategy", "fancy", "a", "b", "c"]
-    )
+    result = runner.invoke(app, ["train", "--save-strategy", "fancy", "a", "b", "c"])
     assert result.exit_code == 2
     assert "not one of 'all', 'latest', 'best'" in result.output
 
