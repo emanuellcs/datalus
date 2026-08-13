@@ -9,15 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from pathlib import Path
-from typing import Optional
 
 import polars as pl
 import typer
 
 from datalus._console import VERBOSE_CHOICES, setup_logging
-
 from datalus.application.audit import (
     PrivacyEvaluator,
     UtilityEvaluator,
@@ -83,9 +80,7 @@ def _validated_verbose(verbose: str) -> str:
     """
 
     if verbose not in VERBOSE_CHOICES:
-        raise typer.BadParameter(
-            f"{verbose!r} is not one of {', '.join(VERBOSE_CHOICES)}."
-        )
+        raise typer.BadParameter(f"{verbose!r} is not one of {', '.join(VERBOSE_CHOICES)}.")
     return verbose
 
 
@@ -104,8 +99,7 @@ def _resolve_checkpoint_path(checkpoint_path: Path, source: str) -> Path:
     resolved = checkpoint_path / f"checkpoint_{source}.pt"
     if not resolved.exists():
         raise typer.BadParameter(
-            f"Checkpoint source not found: {resolved}. "
-            f"Use --checkpoint-source 'latest' or 'best'."
+            f"Checkpoint source not found: {resolved}. Use --checkpoint-source 'latest' or 'best'."
         )
     return resolved
 
@@ -153,7 +147,7 @@ def global_config(
     short_help="Infer schema and preprocess data to Parquet",
 )
 def ingest(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     input_path: Path = typer.Argument(..., help="Input data file or directory path"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
     schema_path: Path = typer.Option(
@@ -161,7 +155,7 @@ def ingest(
         "--schema-path",
         help="Path to save inferred schema JSON (default: artifacts/schema_config.json)",
     ),
-    target_column: Optional[str] = typer.Option(
+    target_column: str | None = typer.Option(
         None,
         "--target-column",
         help="Optional target column name for supervised learning context",
@@ -195,28 +189,22 @@ def ingest(
     short_help="Train diffusion model with checkpointing",
 )
 def train(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
     data_path: Path = typer.Argument(..., help="Path to Parquet training data"),
-    output_dir: Path = typer.Argument(
-        ..., help="Directory for checkpoints and outputs"
-    ),
-    epochs: int = typer.Option(
-        1, "--epochs", "-e", help="Number of training epochs (default: 1)"
-    ),
+    output_dir: Path = typer.Argument(..., help="Directory for checkpoints and outputs"),
+    epochs: int = typer.Option(1, "--epochs", "-e", help="Number of training epochs (default: 1)"),
     batch_size: int = typer.Option(
         2048, "--batch-size", "-b", help="Batch size for training (default: 2048)"
     ),
-    max_steps: Optional[int] = typer.Option(
+    max_steps: int | None = typer.Option(
         None, "--max-steps", help="Stop training after N global steps (optional)"
     ),
-    resume_from: Optional[Path] = typer.Option(
+    resume_from: Path | None = typer.Option(
         None, "--resume-from", "-r", help="Resume training from checkpoint (optional)"
     ),
-    gpu: Optional[str] = typer.Option(
-        None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1' (optional)"
-    ),
-    keep_last: Optional[int] = typer.Option(
+    gpu: str | None = typer.Option(None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1' (optional)"),
+    keep_last: int | None = typer.Option(
         None, "--keep-last", help="Keep only N most recent checkpoints (optional)"
     ),
     save_every: int = typer.Option(
@@ -257,13 +245,8 @@ def train(
     """
     _apply_verbose(verbose)
     if save_strategy not in ("all", "latest", "best"):
-        raise typer.BadParameter(
-            f"{save_strategy!r} is not one of 'all', 'latest', 'best'."
-        )
-    _logger.info(
-        f"Training on {data_path} with schema {schema_path}. "
-        f"Saving checkpoints to {output_dir}"
-    )
+        raise typer.BadParameter(f"{save_strategy!r} is not one of 'all', 'latest', 'best'.")
+    _logger.info(f"Training on {data_path} with schema {schema_path}. Saving checkpoints to {output_dir}")
 
     trainer = DatalusTrainer(
         TrainingConfig(
@@ -296,16 +279,14 @@ def train(
     short_help="Generate synthetic dataset ab initio",
 )
 def sample(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
     n_records: int = typer.Option(
         100, "--n-records", "-n", help="Number of records to generate (default: 100)"
     ),
-    ddim_steps: int = typer.Option(
-        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
-    ),
+    ddim_steps: int = typer.Option(50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
     cfg_scale: float = typer.Option(
         1.0,
@@ -332,9 +313,7 @@ def sample(
     _apply_verbose(verbose)
     checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(f"Sampling {n_records} records from checkpoint {checkpoint_path}...")
-    frame = sample_records(
-        checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
-    )
+    frame = sample_records(checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(output_path, compression="snappy")
     typer.echo(f"Synthetic records written to {output_path}")
@@ -345,7 +324,7 @@ def sample(
     short_help="Append synthetic records to existing dataset",
 )
 def augment(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet file to augment"),
@@ -353,9 +332,7 @@ def augment(
     n_records: int = typer.Option(
         100, "--n-records", "-n", help="Number of records to append (default: 100)"
     ),
-    ddim_steps: int = typer.Option(
-        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
-    ),
+    ddim_steps: int = typer.Option(50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
     cfg_scale: float = typer.Option(
         1.0,
@@ -401,35 +378,25 @@ def augment(
     short_help="Generate records to achieve target class distribution",
 )
 def balance(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
-    input_path: Path = typer.Argument(
-        ..., help="Input Parquet with class labels to balance"
-    ),
+    input_path: Path = typer.Argument(..., help="Input Parquet with class labels to balance"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
-    target_column: str = typer.Argument(
-        ..., help="Target column name for class labels"
-    ),
+    target_column: str = typer.Argument(..., help="Target column name for class labels"),
     target_distribution_json: str = typer.Argument(
         ...,
         help='Target distribution as absolute class counts, e.g., \'{"A": 5000, "B": 5000}\'',
     ),
-    ddim_steps: int = typer.Option(
-        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
-    ),
+    ddim_steps: int = typer.Option(50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
     cfg_scale: float = typer.Option(
         1.0,
         "--cfg-scale",
         help="Classifier-free guidance scale (default: 1.0 = disabled)",
     ),
-    max_attempts: int = typer.Option(
-        10, "--max-attempts", help="Maximum sampling attempts (default: 10)"
-    ),
-    strict: bool = typer.Option(
-        False, "--strict", help="Fail if target distribution not achieved"
-    ),
+    max_attempts: int = typer.Option(10, "--max-attempts", help="Maximum sampling attempts (default: 10)"),
+    strict: bool = typer.Option(False, "--strict", help="Fail if target distribution not achieved"),
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
@@ -450,9 +417,7 @@ def balance(
     """
     _apply_verbose(verbose)
     checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
-    _logger.info(
-        f"Balancing {input_path} toward target distribution for {target_column}..."
-    )
+    _logger.info(f"Balancing {input_path} toward target distribution for {target_column}...")
     frame = balance_records(
         checkpoint_path,
         encoder_path,
@@ -475,20 +440,14 @@ def balance(
     short_help="Fill null values using diffusion masks",
 )
 def inpaint(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet with null values"),
     output_path: Path = typer.Argument(..., help="Output Parquet file path"),
-    ddim_steps: int = typer.Option(
-        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
-    ),
-    jump_length: int = typer.Option(
-        10, "--jump-length", help="RePaint jump length (default: 10)"
-    ),
-    jump_n_sample: int = typer.Option(
-        10, "--jump-n-sample", help="RePaint jump N sample (default: 10)"
-    ),
+    ddim_steps: int = typer.Option(50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"),
+    jump_length: int = typer.Option(10, "--jump-length", help="RePaint jump length (default: 10)"),
+    jump_n_sample: int = typer.Option(10, "--jump-n-sample", help="RePaint jump N sample (default: 10)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
     checkpoint_source: str = typer.Option(
         "latest",
@@ -529,7 +488,7 @@ def inpaint(
     short_help="Generate records under do-style interventions",
 )
 def counterfactual(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     input_path: Path = typer.Argument(..., help="Input Parquet for context"),
@@ -538,9 +497,7 @@ def counterfactual(
         ...,
         help='Column interventions as JSON, e.g., \'{"age": 50, "income": 100000}\'',
     ),
-    ddim_steps: int = typer.Option(
-        50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"
-    ),
+    ddim_steps: int = typer.Option(50, "--ddim-steps", help="DDIM reverse diffusion steps (default: 50)"),
     seed: int = typer.Option(42, "--seed", "-s", help="Random seed (default: 42)"),
     checkpoint_source: str = typer.Option(
         "latest",
@@ -587,19 +544,17 @@ def counterfactual(
     short_help="Run privacy and utility audits",
 )
 def audit(
-    verbose: Optional[str] = _verbose_option(),
-    real_train_path: Path = typer.Argument(
-        ..., help="Path to real training Parquet data"
-    ),
+    verbose: str | None = _verbose_option(),
+    real_train_path: Path = typer.Argument(..., help="Path to real training Parquet data"),
     synthetic_path: Path = typer.Argument(..., help="Path to synthetic Parquet data"),
     schema_path: Path = typer.Argument(..., help="Path to schema JSON file"),
     report_path: Path = typer.Argument(..., help="Output audit report path"),
-    target_column: Optional[str] = typer.Option(
+    target_column: str | None = typer.Option(
         None,
         "--target-column",
         help="Optional target column for utility metrics (classification)",
     ),
-    real_holdout_path: Optional[Path] = typer.Option(
+    real_holdout_path: Path | None = typer.Option(
         None,
         "--real-holdout-path",
         help="Optional holdout dataset for privacy metrics (optional)",
@@ -610,7 +565,7 @@ def audit(
         help="Privacy audit mode: 'release' (uncapped) or 'ci_lite' (bounded regression run). "
         "Use 'ci_lite' for fast CI checks; run 'release' for the full privacy evidence.",
     ),
-    max_audit_rows: Optional[int] = typer.Option(
+    max_audit_rows: int | None = typer.Option(
         None,
         "--max-audit-rows",
         help="Limit audit to N rows for speed (optional)",
@@ -642,9 +597,7 @@ def audit(
         and target_column in real_train.columns
         and target_column in synthetic.columns
     ):
-        report.update(
-            UtilityEvaluator(real_train, synthetic, schema, target_column).run_audit()
-        )
+        report.update(UtilityEvaluator(real_train, synthetic, schema, target_column).run_audit())
     write_audit_report(report_path, report)
     typer.echo(f"Audit report written to {report_path}")
 
@@ -654,7 +607,7 @@ def audit(
     short_help="Export EMA denoiser to ONNX format",
 )
 def export_onnx(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     checkpoint_path: Path = typer.Argument(..., help="Path to training checkpoint"),
     encoder_path: Path = typer.Argument(..., help="Path to encoder JSON config"),
     output_dir: Path = typer.Argument(..., help="Output directory for ONNX files"),
@@ -690,18 +643,14 @@ def export_onnx(
     short_help="Serve FastAPI interface for inference",
 )
 def serve(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
     registry_path: Path = typer.Option(
         Path("artifacts"),
         "--registry-path",
         help="Artifact registry directory (default: artifacts)",
     ),
-    host: str = typer.Option(
-        "0.0.0.0", "--host", help="Server bind address (default: 0.0.0.0)"
-    ),
-    port: int = typer.Option(
-        8000, "--port", "-p", help="Server listen port (default: 8000)"
-    ),
+    host: str = typer.Option("0.0.0.0", "--host", help="Server bind address (default: 0.0.0.0)"),
+    port: int = typer.Option(8000, "--port", "-p", help="Server listen port (default: 8000)"),
 ) -> None:
     """Serve DATALUS artifacts via FastAPI for browser-local inference.
 
@@ -735,7 +684,7 @@ def serve(
     short_help="Launch interactive Streamlit interface",
 )
 def streamlit_app(
-    verbose: Optional[str] = _verbose_option(),
+    verbose: str | None = _verbose_option(),
 ) -> None:
     """Launch the interactive Streamlit interface.
 

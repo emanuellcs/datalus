@@ -9,9 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
+from torch import Tensor, nn
 
 from datalus.domain.diffusion_math import (
     cosine_beta_schedule,
@@ -25,21 +24,15 @@ from datalus.domain.schemas import RePaintConfig
 class VarianceSchedule(nn.Module):
     """Precompute stable diffusion schedule tensors."""
 
-    def __init__(
-        self, num_timesteps: int = 1_000, schedule_type: str = "cosine"
-    ) -> None:
+    def __init__(self, num_timesteps: int = 1_000, schedule_type: str = "cosine") -> None:
         """Build a schedule and precompute its cumulative alpha buffers."""
 
         super().__init__()
         self.num_timesteps = num_timesteps
         if schedule_type == "linear":
-            betas = torch.tensor(
-                linear_beta_schedule(num_timesteps), dtype=torch.float32
-            )
+            betas = torch.tensor(linear_beta_schedule(num_timesteps), dtype=torch.float32)
         elif schedule_type == "cosine":
-            betas = torch.tensor(
-                cosine_beta_schedule(num_timesteps), dtype=torch.float32
-            )
+            betas = torch.tensor(cosine_beta_schedule(num_timesteps), dtype=torch.float32)
         else:
             raise ValueError(f"Unsupported schedule type: {schedule_type}")
         alphas = 1.0 - betas
@@ -87,16 +80,12 @@ class TabularDiffusion(nn.Module):
         self.condition_dropout = condition_dropout
         self.schedule = VarianceSchedule(num_timesteps, schedule_type)
 
-    def q_sample(
-        self, x_start: Tensor, t: Tensor, noise: Tensor | None = None
-    ) -> Tensor:
+    def q_sample(self, x_start: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
         """Corrupt a clean latent to timestep t with the forward diffusion formula."""
 
         if noise is None:
             noise = torch.randn_like(x_start)
-        sqrt_alpha = self.schedule.extract(
-            self.schedule.sqrt_alphas_cumprod, t, x_start.shape
-        )
+        sqrt_alpha = self.schedule.extract(self.schedule.sqrt_alphas_cumprod, t, x_start.shape)
         sqrt_one_minus = self.schedule.extract(
             self.schedule.sqrt_one_minus_alphas_cumprod,
             t,
@@ -104,16 +93,12 @@ class TabularDiffusion(nn.Module):
         )
         return sqrt_alpha * x_start + sqrt_one_minus * noise
 
-    def compute_loss(
-        self, x_start: Tensor, context: Tensor | None = None
-    ) -> dict[str, Tensor]:
+    def compute_loss(self, x_start: Tensor, context: Tensor | None = None) -> dict[str, Tensor]:
         """Return the MSE noise-prediction loss for a random diffusion step."""
 
         batch_size = x_start.shape[0]
         device = x_start.device
-        t = torch.randint(
-            0, self.num_timesteps, (batch_size,), device=device, dtype=torch.long
-        )
+        t = torch.randint(0, self.num_timesteps, (batch_size,), device=device, dtype=torch.long)
         noise = torch.randn_like(x_start)
         x_noisy = self.q_sample(x_start, t, noise)
         if context is not None and self.condition_dropout > 0:
@@ -123,9 +108,7 @@ class TabularDiffusion(nn.Module):
         loss = F.mse_loss(predicted_noise, noise)
         return {"loss": loss, "mse": loss.detach()}
 
-    def forward(
-        self, x_start: Tensor, context: Tensor | None = None
-    ) -> dict[str, Tensor]:
+    def forward(self, x_start: Tensor, context: Tensor | None = None) -> dict[str, Tensor]:
         """Alias forward() to compute_loss for a standard training call."""
 
         return self.compute_loss(x_start, context)
@@ -177,17 +160,13 @@ class TabularDiffusion(nn.Module):
         alpha_prev = self.schedule.alpha_bar_at(prev_t_value, device).clamp(min=1e-8)
         pred_x0 = (x - torch.sqrt(1.0 - alpha_t) * pred_noise) / torch.sqrt(alpha_t)
         if eta > 0 and prev_t_value >= 0:
-            variance = (
-                (1 - alpha_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_prev)
-            ).clamp(min=0)
+            variance = ((1 - alpha_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_prev)).clamp(min=0)
             sigma = eta * torch.sqrt(variance)
             noise = torch.randn_like(x)
         else:
             sigma = torch.tensor(0.0, device=device, dtype=x.dtype)
             noise = torch.zeros_like(x)
-        direction = (
-            torch.sqrt((1.0 - alpha_prev - sigma**2).clamp(min=0.0)) * pred_noise
-        )
+        direction = torch.sqrt((1.0 - alpha_prev - sigma**2).clamp(min=0.0)) * pred_noise
         return torch.sqrt(alpha_prev) * pred_x0 + direction + sigma * noise
 
     @torch.no_grad()
@@ -211,9 +190,7 @@ class TabularDiffusion(nn.Module):
         timesteps = make_ddim_timesteps(self.num_timesteps, ddim_steps)
         for idx, t_value in enumerate(timesteps):
             prev_t = timesteps[idx + 1] if idx < len(timesteps) - 1 else -1
-            x = self.ddim_step(
-                x, int(t_value), int(prev_t), context, cfg_scale, eta, group_guidance
-            )
+            x = self.ddim_step(x, int(t_value), int(prev_t), context, cfg_scale, eta, group_guidance)
         return x
 
     @torch.no_grad()
@@ -248,9 +225,7 @@ class TabularDiffusion(nn.Module):
             if next_t > t_value:
                 x = self.undo_step(x, t_value, next_t)
                 continue
-            unknown = self.ddim_step(
-                x, t_value, next_t, context, cfg_scale, repaint.eta
-            )
+            unknown = self.ddim_step(x, t_value, next_t, context, cfg_scale, repaint.eta)
             if next_t >= 0:
                 next_batch = torch.full(
                     (original_latent.shape[0],),
@@ -280,20 +255,12 @@ class TabularDiffusion(nn.Module):
         device = original_latent.device
         if seed is not None:
             generator = torch.Generator(device=device).manual_seed(seed)
-            noise = torch.randn(
-                original_latent.shape, device=device, generator=generator
-            )
+            noise = torch.randn(original_latent.shape, device=device, generator=generator)
         else:
             noise = torch.randn_like(original_latent)
-        t = torch.full(
-            (original_latent.shape[0],), t_star, device=device, dtype=torch.long
-        )
+        t = torch.full((original_latent.shape[0],), t_star, device=device, dtype=torch.long)
         x = self.q_sample(original_latent, t, noise)
-        timesteps = [
-            step
-            for step in make_ddim_timesteps(self.num_timesteps, ddim_steps)
-            if step <= t_star
-        ]
+        timesteps = [step for step in make_ddim_timesteps(self.num_timesteps, ddim_steps) if step <= t_star]
         if not timesteps or timesteps[0] != t_star:
             timesteps.insert(0, t_star)
         for idx, t_value in enumerate(timesteps):
@@ -317,6 +284,4 @@ class TabularDiffusion(nn.Module):
         alpha_from = self.schedule.alpha_bar_at(from_t, device).clamp(min=1e-8)
         alpha_to = self.schedule.alpha_bar_at(to_t, device).clamp(min=1e-8)
         ratio = (alpha_to / alpha_from).clamp(min=1e-8, max=1.0)
-        return torch.sqrt(ratio) * sample + torch.sqrt(1.0 - ratio) * torch.randn_like(
-            sample
-        )
+        return torch.sqrt(ratio) * sample + torch.sqrt(1.0 - ratio) * torch.randn_like(sample)

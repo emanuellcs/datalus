@@ -61,9 +61,7 @@ def save_checkpoint(path: str | Path, payload: dict[str, Any]) -> None:
     temp.replace(output)
 
 
-def load_checkpoint(
-    path: str | Path, map_location: str | torch.device = "cpu"
-) -> dict[str, Any]:
+def load_checkpoint(path: str | Path, map_location: str | torch.device = "cpu") -> dict[str, Any]:
     """Load a DATALUS training checkpoint."""
 
     return torch.load(path, map_location=map_location, weights_only=False)
@@ -93,9 +91,7 @@ def prune_checkpoints(
 
     # Sort by the step number in the filename so retention survives mtime ties.
     checkpoint_files = [
-        f
-        for f in checkpoint_dir.glob("checkpoint_step_*.pt")
-        if f.name not in preserve_files
+        f for f in checkpoint_dir.glob("checkpoint_step_*.pt") if f.name not in preserve_files
     ]
     checkpoint_files.sort(key=_checkpoint_step)
 
@@ -129,7 +125,7 @@ def update_best_checkpoint(
         try:
             best_checkpoint = load_checkpoint(best_path, map_location="cpu")
             best_loss = best_checkpoint.get("loss", float("inf"))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any load failure resets best loss
             logger.warning(f"Failed to load best checkpoint: {e}. Resetting.")
             best_loss = float("inf")
     else:

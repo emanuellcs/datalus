@@ -8,12 +8,13 @@ Note:
 
 from __future__ import annotations
 
+import csv
 import json
 import logging
 import re
-import csv
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import polars as pl
 
@@ -53,9 +54,7 @@ class ZeroShotPreprocessor:
         self.sample_size = sample_size
         self.target_column = target_column
         self.rare_category_threshold = rare_category_threshold
-        self.null_values = list(
-            null_values or ["", "NA", "N/A", "null", "NULL", "None"]
-        )
+        self.null_values = list(null_values or ["", "NA", "N/A", "null", "NULL", "None"])
         self.schema_registry: dict[str, ColumnProfile] = {}
 
     def scan(self, file_path: str | Path) -> pl.LazyFrame:
@@ -64,13 +63,9 @@ class ZeroShotPreprocessor:
         path = Path(file_path)
         suffixes = [suffix.lower() for suffix in path.suffixes]
         suffix = suffixes[-1] if suffixes else ""
-        tabular_suffix = (
-            suffixes[-2] if suffix == ".gz" and len(suffixes) > 1 else suffix
-        )
+        tabular_suffix = suffixes[-2] if suffix == ".gz" and len(suffixes) > 1 else suffix
         if tabular_suffix in {".csv", ".tsv"}:
-            separator = (
-                "\t" if tabular_suffix == ".tsv" else _detect_csv_separator(path)
-            )
+            separator = "\t" if tabular_suffix == ".tsv" else _detect_csv_separator(path)
             return pl.scan_csv(
                 path,
                 separator=separator,
@@ -91,14 +86,13 @@ class ZeroShotPreprocessor:
             return pl.scan_pyarrow_dataset(ds.dataset(str(path), format="orc"))
         raise ValueError(f"Unsupported input format: {suffix}")
 
-    def fit(self, file_path: str | Path) -> "ZeroShotPreprocessor":
+    def fit(self, file_path: str | Path) -> ZeroShotPreprocessor:
         """Infer topology from a deterministic bounded sample."""
 
         logger.info("Inferring DATALUS schema from %s", file_path)
         sampled = _collect_streaming(self.scan(file_path).head(self.sample_size))
         self.schema_registry = {
-            column: self._infer_column_topology(sampled[column])
-            for column in sampled.columns
+            column: self._infer_column_topology(sampled[column]) for column in sampled.columns
         }
         return self
 
@@ -116,25 +110,17 @@ class ZeroShotPreprocessor:
         self.transform_to_parquet(input_path, output_path)
         return self.schema_registry
 
-    def transform_to_parquet(
-        self, input_path: str | Path, output_path: str | Path
-    ) -> None:
+    def transform_to_parquet(self, input_path: str | Path, output_path: str | Path) -> None:
         """Stream the lazy graph directly to Snappy-compressed Parquet."""
 
         if not self.schema_registry:
             raise RuntimeError("fit() must be called before transform_to_parquet().")
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        columns_to_drop = [
-            name
-            for name, profile in self.schema_registry.items()
-            if not profile.retained
-        ]
+        columns_to_drop = [name for name, profile in self.schema_registry.items() if not profile.retained]
         graph = self.scan(input_path).drop(columns_to_drop)
         try:
-            graph.sink_parquet(
-                str(output), compression="snappy", row_group_size=100_000
-            )
+            graph.sink_parquet(str(output), compression="snappy", row_group_size=100_000)
         except TypeError:
             graph.sink_parquet(str(output), compression="snappy")
 
@@ -143,22 +129,16 @@ class ZeroShotPreprocessor:
 
         output = Path(output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            name: profile.to_dict() for name, profile in self.schema_registry.items()
-        }
-        output.write_text(
-            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
-        )
+        payload = {name: profile.to_dict() for name, profile in self.schema_registry.items()}
+        output.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
     @classmethod
-    def from_schema(cls, schema_path: str | Path) -> "ZeroShotPreprocessor":
+    def from_schema(cls, schema_path: str | Path) -> ZeroShotPreprocessor:
         """Load an existing schema registry."""
 
         instance = cls()
         payload = json.loads(Path(schema_path).read_text(encoding="utf-8"))
-        instance.schema_registry = {
-            name: ColumnProfile(**profile) for name, profile in payload.items()
-        }
+        instance.schema_registry = {name: ColumnProfile(**profile) for name, profile in payload.items()}
         return instance
 
     def _infer_column_topology(self, series: pl.Series) -> ColumnProfile:
@@ -174,11 +154,7 @@ class ZeroShotPreprocessor:
 
         category_frequencies = self._category_frequencies(series)
         rare_category_count = (
-            sum(
-                1
-                for count in category_frequencies.values()
-                if count <= self.rare_category_threshold
-            )
+            sum(1 for count in category_frequencies.values() if count <= self.rare_category_threshold)
             if category_frequencies is not None
             else None
         )
@@ -200,9 +176,7 @@ class ZeroShotPreprocessor:
                 category_frequencies=category_frequencies,
                 rare_category_count=rare_category_count,
                 rare_category_threshold=(
-                    self.rare_category_threshold
-                    if category_frequencies is not None
-                    else None
+                    self.rare_category_threshold if category_frequencies is not None else None
                 ),
                 rare_categories_preserved=True,
                 is_target=is_target,
@@ -211,16 +185,10 @@ class ZeroShotPreprocessor:
             )
 
         if null_ratio > 0.95 and not is_target:
-            return profile(
-                "SPARSE", "DROP", retained=False, reason="null_ratio_gt_0.95"
-            )
+            return profile("SPARSE", "DROP", retained=False, reason="null_ratio_gt_0.95")
 
-        if not is_target and self._looks_like_identifier(
-            name, cardinality, total_count
-        ):
-            return profile(
-                "IDENTIFIER", "DROP", retained=False, reason="identifier_policy"
-            )
+        if not is_target and self._looks_like_identifier(name, cardinality, total_count):
+            return profile("IDENTIFIER", "DROP", retained=False, reason="identifier_policy")
 
         if series.dtype in {pl.Boolean} or cardinality == 2:
             return profile("BOOLEAN", "BINARY_ENCODING")
@@ -283,10 +251,7 @@ class ZeroShotPreprocessor:
             return {}
         name_col = counts.columns[0]
         count_col = counts.columns[1]
-        return {
-            str(row[name_col]): int(row[count_col])
-            for row in counts.iter_rows(named=True)
-        }
+        return {str(row[name_col]): int(row[count_col]) for row in counts.iter_rows(named=True)}
 
 
 def _detect_csv_separator(path: Path) -> str:
@@ -297,7 +262,7 @@ def _detect_csv_separator(path: Path) -> str:
             sample = handle.read(65_536).decode("latin1", errors="ignore")
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
         return dialect.delimiter
-    except Exception:
+    except Exception:  # noqa: BLE001 - default to semicolon on sniff failure
         # Semicolons are the common delimiter in Brazilian spreadsheet exports.
         return ";"
 

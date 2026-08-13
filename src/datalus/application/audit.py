@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -81,33 +82,22 @@ class PrivacyEvaluator:
             remainder="drop",
         )
 
-    def _project(
-        self, fit_frame: pl.DataFrame, *frames: pl.DataFrame
-    ) -> list[np.ndarray]:
+    def _project(self, fit_frame: pl.DataFrame, *frames: pl.DataFrame) -> list[np.ndarray]:
         """Fit the preprocessor and transform the given frames to arrays."""
 
         fit_pd = fit_frame.to_pandas()
         self.preprocessor.fit(fit_pd)
-        return [
-            self.preprocessor.transform(frame.to_pandas()).astype(np.float32)
-            for frame in frames
-        ]
+        return [self.preprocessor.transform(frame.to_pandas()).astype(np.float32) for frame in frames]
 
-    def compute_dcr(
-        self, thresholds: PrivacyThresholds | None = None
-    ) -> dict[str, Any]:
+    def compute_dcr(self, thresholds: PrivacyThresholds | None = None) -> dict[str, Any]:
         """Compute the Distance to Closest Record metric and its verdict."""
 
         threshold_cfg = thresholds or PrivacyThresholds()
-        x_real, x_synth = self._project(
-            self.real_train, self.real_train, self.synthetic
-        )
+        x_real, x_synth = self._project(self.real_train, self.real_train, self.synthetic)
         nn = NearestNeighbors(n_neighbors=2, algorithm="auto", n_jobs=-1).fit(x_real)
         synth_distances, _ = nn.kneighbors(x_synth, n_neighbors=1)
         real_distances, _ = nn.kneighbors(x_real, n_neighbors=2)
-        baseline_threshold = float(
-            np.percentile(real_distances[:, 1], threshold_cfg.dcr_percentile)
-        )
+        baseline_threshold = float(np.percentile(real_distances[:, 1], threshold_cfg.dcr_percentile))
         distances = synth_distances[:, 0]
         memorization_ratio = float(np.mean(distances < baseline_threshold))
         return {
@@ -116,17 +106,13 @@ class PrivacyEvaluator:
             "dcr_alert_threshold": baseline_threshold,
             "prop_below_alert_threshold": memorization_ratio,
             "privacy_verdict_dcr": (
-                "APPROVED"
-                if memorization_ratio < threshold_cfg.memorization_ratio
-                else "REJECTED"
+                "APPROVED" if memorization_ratio < threshold_cfg.memorization_ratio else "REJECTED"
             ),
         }
 
     def shadow_membership_inference(
         self,
-        synthetic_provider: (
-            Callable[[pl.DataFrame, int, int], pl.DataFrame] | None
-        ) = None,
+        synthetic_provider: (Callable[[pl.DataFrame, int, int], pl.DataFrame] | None) = None,
         config: ShadowMIAConfig | None = None,
         thresholds: PrivacyThresholds | None = None,
     ) -> dict[str, Any]:
@@ -161,9 +147,7 @@ class PrivacyEvaluator:
                     shuffle=True,
                 )
             members = pl.from_pandas(real_pd.iloc[member_idx].reset_index(drop=True))
-            nonmembers = pl.from_pandas(
-                real_pd.iloc[nonmember_idx].reset_index(drop=True)
-            )
+            nonmembers = pl.from_pandas(real_pd.iloc[nonmember_idx].reset_index(drop=True))
             n_synth = max(1, int(len(members) * cfg.synthetic_multiplier))
             shadow_synth = (
                 synthetic_provider(members, n_synth, cfg.random_state + idx)
@@ -199,21 +183,15 @@ class PrivacyEvaluator:
             target_members = self.real_train
             target_nonmembers = self.real_holdout
         member_features = self._attack_features(target_members, self.synthetic, cfg)
-        nonmember_features = self._attack_features(
-            target_nonmembers, self.synthetic, cfg
-        )
+        nonmember_features = self._attack_features(target_nonmembers, self.synthetic, cfg)
         x_eval = np.vstack([member_features, nonmember_features])
-        y_eval = np.concatenate(
-            [np.ones(len(member_features)), np.zeros(len(nonmember_features))]
-        )
+        y_eval = np.concatenate([np.ones(len(member_features)), np.zeros(len(nonmember_features))])
         scores = attack_model.predict_proba(x_eval)[:, 1]
         auc = float(roc_auc_score(y_eval, scores))
         return {
             "mia_roc_auc": auc,
             "mia_average_precision": float(average_precision_score(y_eval, scores)),
-            "privacy_verdict_mia": (
-                "APPROVED" if auc < threshold_cfg.mia_roc_auc else "REJECTED"
-            ),
+            "privacy_verdict_mia": ("APPROVED" if auc < threshold_cfg.mia_roc_auc else "REJECTED"),
             "shadow_models": cfg.n_shadow_models,
             "mia_mode": cfg.mode,
         }
@@ -234,9 +212,7 @@ class PrivacyEvaluator:
             fit_frame, candidates.select(self.columns), generated.select(self.columns)
         )
         k = min(config.n_neighbors, len(x_generated))
-        nn = NearestNeighbors(n_neighbors=k, algorithm="auto", n_jobs=-1).fit(
-            x_generated
-        )
+        nn = NearestNeighbors(n_neighbors=k, algorithm="auto", n_jobs=-1).fit(x_generated)
         distances, _ = nn.kneighbors(x_candidates)
         min_d = distances[:, 0]
         mean_k = distances.mean(axis=1)
@@ -246,22 +222,15 @@ class PrivacyEvaluator:
 
     def run_audit(
         self,
-        synthetic_provider: (
-            Callable[[pl.DataFrame, int, int], pl.DataFrame] | None
-        ) = None,
+        synthetic_provider: (Callable[[pl.DataFrame, int, int], pl.DataFrame] | None) = None,
         thresholds: PrivacyThresholds | None = None,
         config: ShadowMIAConfig | None = None,
     ) -> dict[str, Any]:
         """Run DCR and Shadow MIA and combine them into one privacy verdict."""
 
         dcr = self.compute_dcr(thresholds)
-        mia = self.shadow_membership_inference(
-            synthetic_provider, config=config, thresholds=thresholds
-        )
-        approved = (
-            dcr["privacy_verdict_dcr"] == "APPROVED"
-            and mia["privacy_verdict_mia"] == "APPROVED"
-        )
+        mia = self.shadow_membership_inference(synthetic_provider, config=config, thresholds=thresholds)
+        approved = dcr["privacy_verdict_dcr"] == "APPROVED" and mia["privacy_verdict_mia"] == "APPROVED"
         return {
             "audit_type": "Privacy",
             "privacy": {
@@ -333,9 +302,7 @@ class UtilityEvaluator:
                 "tstr_f1": tstr["f1_score"],
                 "mle_ratio_auc": mle_auc,
                 "mle_ratio_f1": mle_f1,
-                "utility_verdict": (
-                    "APPROVED" if mle_auc >= approval_threshold else "REJECTED"
-                ),
+                "utility_verdict": ("APPROVED" if mle_auc >= approval_threshold else "REJECTED"),
             },
         }
 
@@ -350,11 +317,7 @@ class UtilityEvaluator:
             scores = model.decision_function(x_test)
         preds = (scores >= 0.5).astype(int)
         return {
-            "roc_auc": (
-                float(roc_auc_score(y_test, scores))
-                if len(np.unique(y_test)) > 1
-                else 0.5
-            ),
+            "roc_auc": (float(roc_auc_score(y_test, scores)) if len(np.unique(y_test)) > 1 else 0.5),
             "f1_score": float(f1_score(y_test, preds, zero_division=0)),
         }
 
@@ -373,7 +336,7 @@ def build_tabular_classifier(random_state: int = 42):
             n_jobs=-1,
             verbose=-1,
         )
-    except Exception:
+    except ImportError:
         numeric = Pipeline([("scale", StandardScaler())])
         categorical = Pipeline([("onehot", OneHotEncoder(handle_unknown="ignore"))])
         preprocessor = ColumnTransformer(
@@ -415,9 +378,7 @@ def _bootstrap_shadow_generator(
         if series.dtype.is_numeric():
             arr = series.cast(pl.Float64).to_numpy()
             scale = np.nanstd(arr) * 0.01
-            mutated[column] = arr + rng.normal(
-                0.0, scale if scale > 0 else 1e-6, size=len(arr)
-            )
+            mutated[column] = arr + rng.normal(0.0, scale if scale > 0 else 1e-6, size=len(arr))
         else:
             mutated[column] = series.to_list()
     return pl.DataFrame(mutated)
@@ -441,16 +402,12 @@ def _effective_shadow_config(config: ShadowMIAConfig) -> ShadowMIAConfig:
     )
 
 
-def _bounded_frame(
-    frame: pl.DataFrame, max_rows: int | None, random_state: int
-) -> pl.DataFrame:
+def _bounded_frame(frame: pl.DataFrame, max_rows: int | None, random_state: int) -> pl.DataFrame:
     """Return a deterministic bounded audit sample for inexpensive CI checks."""
 
     if max_rows is None or len(frame) <= max_rows:
         return frame
-    indices = np.random.default_rng(random_state).choice(
-        len(frame), size=max_rows, replace=False
-    )
+    indices = np.random.default_rng(random_state).choice(len(frame), size=max_rows, replace=False)
     return frame[indices]
 
 
@@ -465,6 +422,4 @@ def write_audit_report(path: str | Path, report: dict[str, Any]) -> None:
 
     output = Path(path)
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(
-        json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8"
-    )
+    output.write_text(json.dumps(report, indent=2, sort_keys=True, default=str), encoding="utf-8")

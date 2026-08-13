@@ -11,7 +11,6 @@ every command can offer a ``--verbose`` option with consistent behaviour.
 from __future__ import annotations
 
 import logging
-from typing import Literal
 
 from rich.console import Console
 from rich.logging import RichHandler

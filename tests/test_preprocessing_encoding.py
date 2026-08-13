@@ -44,11 +44,6 @@ def test_lazy_preprocessing_and_reversible_encoding(tmp_path):
     assert encoded.x_cat is not None
     assert "target" in encoder.categorical_columns
     assert encoder.categorical_vocabs["municipality"].vocab["small-town"] > 1
-    assert (
-        encoder.categorical_vocabs["municipality"].transform(
-            np.array(["never-seen-town"])
-        )[0]
-        == 0
-    )
+    assert encoder.categorical_vocabs["municipality"].transform(np.array(["never-seen-town"]))[0] == 0
     assert np.isfinite(encoded.x_num).all()
     assert len(decoded) == len(processed_frame)
