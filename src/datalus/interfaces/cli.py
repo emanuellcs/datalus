@@ -737,7 +737,7 @@ def serve(
 def streamlit_app(
     verbose: Optional[str] = _verbose_option(),
 ) -> None:
-    """Launch the interactive Brazilian Portuguese Streamlit interface.
+    """Launch the interactive Streamlit interface.
 
     The streamlit command opens a web-based UI for exploring DATALUS
     artifacts, running inference, and visualizing synthetic data.

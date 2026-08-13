@@ -1,8 +1,5 @@
 # DATALUS: Diffusion-Augmented Tabular Architecture for Local Utility and Security
 
->[!NOTE]
-> 🇧🇷 **Atenção Comissão Julgadora do 32º Prêmio Jovem Cientista:** A documentação oficial, elaborada com o rigor científico exigido pelo edital e detalhando o impacto na LGPD e em políticas públicas, encontra-se no arquivo [README_pt-BR.md](./README_pt-BR.md).
-
 DATALUS is a production-oriented Generative AI framework for synthetic tabular data. It is designed for high-dimensional, heterogeneous, privacy-sensitive government datasets, with a specific proof-of-concept path for Brazilian public-sector health data. The system learns a joint distribution over tabular records, samples new microdata from that distribution, and subjects generated artifacts to reproducible privacy and utility audits before release.
 
 DATALUS is not an anonymization script. It is a generative ecosystem for ab-initio synthesis, data augmentation, minority-class balancing, tabular inpainting, counterfactual modification, audit automation, ONNX export, INT8 edge inference, FastAPI artifact serving, Streamlit operation, and browser-local execution through ONNX Runtime Web.
@@ -132,7 +129,7 @@ The current denoiser exposes CFG-compatible inference logic. In the default trai
 
 ## Interactive Notebooks
 
-DATALUS provides a suite of production-grade Jupyter Notebooks designed for different stakeholders and environments. These notebooks are localized in both **English** and **Brazilian Portuguese**.
+DATALUS provides a suite of production-grade Jupyter Notebooks designed for different stakeholders and environments. These notebooks are localized in **English**.
 
 | Notebook | Focus | Key Operations |
 | --- | --- | --- |
@@ -426,7 +423,7 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | `audit` | Run DCR and Shadow-MIA, and utility when target is valid. | Audit JSON report. |
 | `export-onnx` | Export EMA denoiser to ONNX and optional INT8. | ONNX files and manifest JSON. |
 | `serve` | Serve artifacts for browser-local inference. | FastAPI service. |
-| `streamlit` | Launch the Portuguese Streamlit UI. | Streamlit service. |
+| `streamlit` | Launch the interactive Streamlit UI. | Streamlit service. |
 
 ### Command Arguments and Defaults
 
