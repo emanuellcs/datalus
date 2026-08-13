@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import math
+from itertools import pairwise
 from typing import Any
 
 import torch
-import torch.nn as nn
-from torch import Tensor
+from torch import Tensor, nn
 
 
 class SinusoidalTimeEmbedding(nn.Module):
@@ -30,18 +30,14 @@ class SinusoidalTimeEmbedding(nn.Module):
         args = t.float().unsqueeze(1) * frequencies.unsqueeze(0)
         embeddings = torch.cat([args.sin(), args.cos()], dim=-1)
         if self.dim % 2:
-            embeddings = torch.cat(
-                [embeddings, torch.zeros_like(embeddings[:, :1])], dim=-1
-            )
+            embeddings = torch.cat([embeddings, torch.zeros_like(embeddings[:, :1])], dim=-1)
         return embeddings
 
 
 class ResidualMLPBlock(nn.Module):
     """Residual denoising block with timestep injection."""
 
-    def __init__(
-        self, d_in: int, d_out: int, time_emb_dim: int, dropout: float
-    ) -> None:
+    def __init__(self, d_in: int, d_out: int, time_emb_dim: int, dropout: float) -> None:
         """Initialize the residual block with a matching residual projection."""
 
         super().__init__()
@@ -103,8 +99,7 @@ class TabularDenoiserMLP(nn.Module):
         )
         self.input_proj = nn.Linear(d_in, hidden_dims[0])
         self.blocks = nn.ModuleList(
-            ResidualMLPBlock(left, right, time_emb_dim, dropout)
-            for left, right in zip(hidden_dims[:-1], hidden_dims[1:])
+            ResidualMLPBlock(left, right, time_emb_dim, dropout) for left, right in pairwise(hidden_dims)
         )
         self.final = nn.Sequential(
             nn.LayerNorm(hidden_dims[-1]),
@@ -120,9 +115,7 @@ class TabularDenoiserMLP(nn.Module):
         t_emb = self.time_embed(t)
         if self.context_proj is not None:
             if c is None:
-                c = torch.zeros(
-                    (x.shape[0], self.context_dim), device=x.device, dtype=x.dtype
-                )
+                c = torch.zeros((x.shape[0], self.context_dim), device=x.device, dtype=x.dtype)
             t_emb = t_emb + self.context_proj(c.to(dtype=x.dtype))
         h = self.input_proj(x)
         for block in self.blocks:
@@ -173,10 +166,7 @@ class FeatureProjector(nn.Module):
                 for cardinality, embedding_dim in self.cat_dims
             ],
             "latent_dim": self.total_latent_dim,
-            "embeddings": [
-                embedding.weight.detach().cpu().float().tolist()
-                for embedding in self.embeddings
-            ],
+            "embeddings": [embedding.weight.detach().cpu().float().tolist() for embedding in self.embeddings],
         }
 
     def forward(self, x_num: Tensor | None, x_cat: Tensor | None) -> Tensor:
@@ -205,7 +195,7 @@ class FeatureProjector(nn.Module):
             return None
         current = self.num_dim
         decoded: list[Tensor] = []
-        for embedding, (_, emb_dim) in zip(self.embeddings, self.cat_dims):
+        for embedding, (_, emb_dim) in zip(self.embeddings, self.cat_dims, strict=False):
             chunk = latent[:, current : current + emb_dim]
             current += emb_dim
             distances = torch.cdist(chunk.float(), embedding.weight.float())
@@ -228,9 +218,7 @@ class EMA:
 
         self.decay = decay
         self.shadow = {
-            name: param.detach().clone()
-            for name, param in model.named_parameters()
-            if param.requires_grad
+            name: param.detach().clone() for name, param in model.named_parameters() if param.requires_grad
         }
 
     @torch.no_grad()
@@ -240,9 +228,7 @@ class EMA:
         for name, param in model.named_parameters():
             if name not in self.shadow:
                 continue
-            self.shadow[name].mul_(self.decay).add_(
-                param.detach(), alpha=1.0 - self.decay
-            )
+            self.shadow[name].mul_(self.decay).add_(param.detach(), alpha=1.0 - self.decay)
 
     def state_dict(self) -> dict[str, Any]:
         """Return the decay and shadow weights for persistence."""
@@ -261,6 +247,4 @@ class EMA:
 
         for name, param in model.named_parameters():
             if name in self.shadow:
-                param.copy_(
-                    self.shadow[name].to(device=param.device, dtype=param.dtype)
-                )
+                param.copy_(self.shadow[name].to(device=param.device, dtype=param.dtype))

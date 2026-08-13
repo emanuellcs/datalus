@@ -29,9 +29,7 @@ class NumericQuantileTransform:
     fill_value: float
 
     @classmethod
-    def fit(
-        cls, column: str, values: np.ndarray, n_quantiles: int = 1_000
-    ) -> "NumericQuantileTransform":
+    def fit(cls, column: str, values: np.ndarray, n_quantiles: int = 1_000) -> NumericQuantileTransform:
         """Fit monotone quantiles and a fill value for one numeric column."""
 
         clean = values.astype(np.float64)
@@ -74,7 +72,7 @@ class NumericQuantileTransform:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "NumericQuantileTransform":
+    def from_dict(cls, payload: dict[str, Any]) -> NumericQuantileTransform:
         """Rebuild a transform from a serialized payload."""
 
         return cls(**payload)
@@ -91,13 +89,11 @@ class CategoricalVocabulary:
     unknown_token: str = "__UNKNOWN__"
 
     @classmethod
-    def fit(cls, column: str, values: np.ndarray) -> "CategoricalVocabulary":
+    def fit(cls, column: str, values: np.ndarray) -> CategoricalVocabulary:
         """Collect sorted categories and their observed frequencies."""
 
         normalized = [_normalize_category(value) for value in values]
-        categories = sorted(
-            {value for value in normalized if value not in {"__NULL__", "__UNKNOWN__"}}
-        )
+        categories = sorted({value for value in normalized if value not in {"__NULL__", "__UNKNOWN__"}})
         frequencies: dict[str, int] = {}
         for value in normalized:
             frequencies[value] = frequencies.get(value, 0) + 1
@@ -126,10 +122,7 @@ class CategoricalVocabulary:
         vocab = self.vocab
         # Keep fitted categories as distinct tokens; only unseen values map to the sentinel.
         return np.array(
-            [
-                vocab.get(_normalize_category(value), vocab[self.unknown_token])
-                for value in values
-            ],
+            [vocab.get(_normalize_category(value), vocab[self.unknown_token]) for value in values],
             dtype=np.int64,
         )
 
@@ -153,7 +146,7 @@ class CategoricalVocabulary:
         }
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "CategoricalVocabulary":
+    def from_dict(cls, payload: dict[str, Any]) -> CategoricalVocabulary:
         """Rebuild a vocabulary from a serialized payload."""
 
         return cls(**payload)
@@ -219,31 +212,23 @@ class TabularEncoder:
             or meta.get("inferred_topology") == "BOOLEAN"
         ]
 
-    def fit(self, frame: pl.DataFrame) -> "TabularEncoder":
+    def fit(self, frame: pl.DataFrame) -> TabularEncoder:
         """Fit numeric transforms and categorical vocabularies on a frame."""
 
         for column in self.numerical_columns:
             values = frame.get_column(column).cast(pl.Float64, strict=False).to_numpy()
-            self.numeric_transforms[column] = NumericQuantileTransform.fit(
-                column, values
-            )
+            self.numeric_transforms[column] = NumericQuantileTransform.fit(column, values)
         for column in self.categorical_columns:
             values = frame.get_column(column).to_numpy()
             self.categorical_vocabs[column] = CategoricalVocabulary.fit(column, values)
-            self.schema_metadata[column]["cardinality"] = self.categorical_vocabs[
-                column
-            ].size
+            self.schema_metadata[column]["cardinality"] = self.categorical_vocabs[column].size
             self.schema_metadata[column]["category_frequencies"] = (
                 self.categorical_vocabs[column].frequencies or {}
             )
-            rare_threshold = int(
-                self.schema_metadata[column].get("rare_category_threshold") or 5
-            )
+            rare_threshold = int(self.schema_metadata[column].get("rare_category_threshold") or 5)
             self.schema_metadata[column]["rare_category_count"] = sum(
                 1
-                for count in (
-                    self.categorical_vocabs[column].frequencies or {}
-                ).values()
+                for count in (self.categorical_vocabs[column].frequencies or {}).values()
                 if count <= rare_threshold
             )
             self.schema_metadata[column]["rare_categories_preserved"] = True
@@ -264,9 +249,7 @@ class TabularEncoder:
             x_num = np.stack(encoded_num, axis=1).astype(np.float32)
         if self.categorical_columns:
             encoded_cat = [
-                self.categorical_vocabs[column].transform(
-                    frame.get_column(column).to_numpy()
-                )
+                self.categorical_vocabs[column].transform(frame.get_column(column).to_numpy())
                 for column in self.categorical_columns
             ]
             x_cat = np.stack(encoded_cat, axis=1).astype(np.int64)
@@ -292,12 +275,10 @@ class TabularEncoder:
         return {
             "schema_metadata": self.schema_metadata,
             "numeric_transforms": {
-                column: transform.to_dict()
-                for column, transform in self.numeric_transforms.items()
+                column: transform.to_dict() for column, transform in self.numeric_transforms.items()
             },
             "categorical_vocabs": {
-                column: vocab.to_dict()
-                for column, vocab in self.categorical_vocabs.items()
+                column: vocab.to_dict() for column, vocab in self.categorical_vocabs.items()
             },
         }
 
@@ -306,12 +287,10 @@ class TabularEncoder:
 
         output = Path(path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(self.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
-        )
+        output.write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TabularEncoder":
+    def from_dict(cls, payload: dict[str, Any]) -> TabularEncoder:
         """Rebuild an encoder from a serialized payload."""
 
         return cls(
@@ -327,7 +306,7 @@ class TabularEncoder:
         )
 
     @classmethod
-    def load(cls, path: str | Path) -> "TabularEncoder":
+    def load(cls, path: str | Path) -> TabularEncoder:
         """Load an encoder from a JSON artifact file."""
 
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))

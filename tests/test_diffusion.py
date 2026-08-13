@@ -1,5 +1,7 @@
 """Tests for diffusion sampling, inpainting, and RePaint schedules."""
 
+from itertools import pairwise
+
 import torch
 
 from datalus.domain.diffusion_math import make_repaint_schedule
@@ -33,5 +35,5 @@ def test_repaint_schedule_contains_forward_jumps():
     """The RePaint schedule includes forward jumps and ends at -1."""
 
     schedule = make_repaint_schedule(100, 20, jump_length=5, jump_n_sample=2)
-    assert any(next_step > step for step, next_step in zip(schedule, schedule[1:]))
+    assert any(next_step > step for step, next_step in pairwise(schedule))
     assert schedule[-1] == -1

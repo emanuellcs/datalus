@@ -37,9 +37,7 @@ def sample_records(
 ) -> pl.DataFrame:
     """Generate ab-initio synthetic records from a trained checkpoint."""
 
-    diffusion, projector, encoder, device = load_model_bundle(
-        checkpoint_path, encoder_path
-    )
+    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
     latent = diffusion.sample_ddim(
         (n_records, projector.total_latent_dim),
         device=device,
@@ -62,12 +60,8 @@ def augment_records(
     """Append ab-initio synthetic rows to an existing tabular dataset."""
 
     original = pl.read_parquet(input_path)
-    synthetic = sample_records(
-        checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale
-    )
-    return pl.concat(
-        [original, synthetic.select(original.columns)], how="vertical_relaxed"
-    )
+    synthetic = sample_records(checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale)
+    return pl.concat([original, synthetic.select(original.columns)], how="vertical_relaxed")
 
 
 def balance_records(
@@ -118,15 +112,11 @@ def balance_records(
                 needed[label] -= len(take)
         remaining = sum(needed.values())
     if strict and remaining > 0:
-        raise RuntimeError(
-            "Unable to satisfy the requested target distribution within max_attempts."
-        )
+        raise RuntimeError("Unable to satisfy the requested target distribution within max_attempts.")
     if not generated_parts:
         return original
     generated = pl.concat(generated_parts, how="vertical_relaxed")
-    return pl.concat(
-        [original, generated.select(original.columns)], how="vertical_relaxed"
-    )
+    return pl.concat([original, generated.select(original.columns)], how="vertical_relaxed")
 
 
 def inpaint_records(
@@ -140,21 +130,11 @@ def inpaint_records(
 ) -> pl.DataFrame:
     """Fill null values in tabular records with RePaint-style masks."""
 
-    diffusion, projector, encoder, device = load_model_bundle(
-        checkpoint_path, encoder_path
-    )
+    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
     frame = pl.read_parquet(input_path)
     encoded = encoder.transform(frame)
-    x_num = (
-        torch.from_numpy(encoded.x_num).to(device)
-        if encoded.x_num is not None
-        else None
-    )
-    x_cat = (
-        torch.from_numpy(encoded.x_cat).to(device)
-        if encoded.x_cat is not None
-        else None
-    )
+    x_num = torch.from_numpy(encoded.x_num).to(device) if encoded.x_num is not None else None
+    x_cat = torch.from_numpy(encoded.x_cat).to(device) if encoded.x_cat is not None else None
     original_latent = projector(x_num, x_cat)
     mask = latent_known_mask(frame, projector, encoder).to(device)
     latent = diffusion.inpaint_repaint(
@@ -180,25 +160,13 @@ def counterfactual_records(
 ) -> pl.DataFrame:
     """Generate records under explicit do-style column interventions."""
 
-    diffusion, projector, encoder, device = load_model_bundle(
-        checkpoint_path, encoder_path
-    )
+    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
     frame = pl.read_parquet(input_path)
     interventions: dict[str, Any] = json.loads(intervention_json)
-    intervened = frame.with_columns(
-        [pl.lit(value).alias(column) for column, value in interventions.items()]
-    )
+    intervened = frame.with_columns([pl.lit(value).alias(column) for column, value in interventions.items()])
     encoded = encoder.transform(intervened)
-    x_num = (
-        torch.from_numpy(encoded.x_num).to(device)
-        if encoded.x_num is not None
-        else None
-    )
-    x_cat = (
-        torch.from_numpy(encoded.x_cat).to(device)
-        if encoded.x_cat is not None
-        else None
-    )
+    x_num = torch.from_numpy(encoded.x_num).to(device) if encoded.x_num is not None else None
+    x_cat = torch.from_numpy(encoded.x_cat).to(device) if encoded.x_cat is not None else None
     intervention_latent = projector(x_num, x_cat)
     mask = intervention_latent_mask(projector, encoder, list(interventions)).to(device)
     latent = diffusion.inpaint_repaint(
@@ -269,9 +237,7 @@ def load_model_bundle(
         encoder.categorical_columns,
     )
     projector.load_state_dict(checkpoint["projector_state"])
-    hidden_dims = tuple(
-        checkpoint.get("config", {}).get("hidden_dims", (512, 1024, 1024, 512))
-    )
+    hidden_dims = tuple(checkpoint.get("config", {}).get("hidden_dims", (512, 1024, 1024, 512)))
     num_timesteps = int(checkpoint.get("config", {}).get("num_timesteps", 1000))
     denoiser = TabularDenoiserMLP(
         d_in=projector.total_latent_dim,
@@ -314,7 +280,7 @@ def latent_known_mask(
     for column in encoder.numerical_columns:
         known = (~frame.get_column(column).is_null()).cast(pl.Float32).to_numpy()
         parts.append(torch.from_numpy(known[:, None]))
-    for column, (_, emb_dim) in zip(encoder.categorical_columns, projector.cat_dims):
+    for column, (_, emb_dim) in zip(encoder.categorical_columns, projector.cat_dims, strict=False):
         known = (~frame.get_column(column).is_null()).cast(pl.Float32).to_numpy()
         parts.append(torch.from_numpy(known[:, None]).repeat(1, emb_dim))
     return torch.cat(parts, dim=1).float()
@@ -331,7 +297,7 @@ def intervention_latent_mask(
     parts: list[torch.Tensor] = []
     for column in encoder.numerical_columns:
         parts.append(torch.tensor([[1.0 if column in active else 0.0]]))
-    for column, (_, emb_dim) in zip(encoder.categorical_columns, projector.cat_dims):
+    for column, (_, emb_dim) in zip(encoder.categorical_columns, projector.cat_dims, strict=False):
         value = 1.0 if column in active else 0.0
         parts.append(torch.full((1, emb_dim), value))
     return torch.cat(parts, dim=1).float()

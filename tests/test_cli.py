@@ -1,9 +1,9 @@
 """CLI delivery-adapter tests using typer's CliRunner."""
 
 import re
-import tempfile
-from pathlib import Path
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from datalus.interfaces.cli import (
@@ -135,12 +135,8 @@ def test_resolve_checkpoint_path_with_directory(tmp_path):
 
 def test_resolve_checkpoint_path_missing_source_is_clean_error(tmp_path):
     (tmp_path / "checkpoint_best.pt").touch()
-    try:
+    with pytest.raises(typer.BadParameter, match="Checkpoint source not found"):
         _resolve_checkpoint_path(tmp_path, "latest")
-    except Exception as exc:
-        assert "Checkpoint source not found" in str(exc)
-    else:  # pragma: no cover - the missing file must raise
-        raise AssertionError("Expected BadParameter for missing checkpoint source")
 
 
 def test_resolve_checkpoint_path_with_file_ignores_source(tmp_path):
@@ -155,9 +151,5 @@ def test_validate_verbose_accepts_known_levels():
 
 
 def test_validate_verbose_rejects_unknown_level():
-    try:
+    with pytest.raises(typer.BadParameter, match="not one of WARNING, INFO, DEBUG"):
         _validated_verbose("NOISY")
-    except Exception as exc:
-        assert "not one of WARNING, INFO, DEBUG" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("Expected BadParameter for unknown verbose level")

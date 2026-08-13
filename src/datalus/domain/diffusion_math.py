@@ -27,9 +27,7 @@ def cosine_beta_schedule(timesteps: int, s: float = 0.008) -> list[float]:
     return [min(0.999, max(1e-5, beta)) for beta in betas]
 
 
-def linear_beta_schedule(
-    timesteps: int, beta_start: float = 1e-4, beta_end: float = 0.02
-) -> list[float]:
+def linear_beta_schedule(timesteps: int, beta_start: float = 1e-4, beta_end: float = 0.02) -> list[float]:
     """Return a simple linear beta schedule for ablation and tests."""
 
     if timesteps < 1:
@@ -46,9 +44,7 @@ def make_ddim_timesteps(num_train_timesteps: int, ddim_steps: int) -> list[int]:
     steps = max(1, min(num_train_timesteps, int(ddim_steps)))
     if steps == 1:
         return [num_train_timesteps - 1]
-    values = [
-        round(idx * (num_train_timesteps - 1) / (steps - 1)) for idx in range(steps)
-    ]
+    values = [round(idx * (num_train_timesteps - 1) / (steps - 1)) for idx in range(steps)]
     # Descend from the final timestep and remove rounding duplicates.
     descending = list(reversed(values))
     deduped: list[int] = []
@@ -70,8 +66,7 @@ def make_repaint_schedule(
     jump_length = max(1, int(jump_length))
     jump_n_sample = max(1, int(jump_n_sample))
     jumps = {
-        step: jump_n_sample - 1
-        for step in range(0, max(num_inference_steps - jump_length, 0), jump_length)
+        step: jump_n_sample - 1 for step in range(0, max(num_inference_steps - jump_length, 0), jump_length)
     }
     # Walk down the timesteps, jumping forward where the schedule demands it.
     sequence: list[int] = []

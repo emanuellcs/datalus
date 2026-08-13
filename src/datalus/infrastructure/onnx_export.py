@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 import torch
-import torch.nn as nn
+from torch import nn
 
 
 class ONNXDenoiserWrapper(nn.Module):
@@ -86,9 +86,7 @@ def validate_onnx_parity(
     with torch.no_grad():
         torch_out = denoiser(x, t, None).detach().cpu().numpy()
     session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    ort_out = session.run(None, {"x_t": x.cpu().numpy(), "timestep": t.cpu().numpy()})[
-        0
-    ]
+    ort_out = session.run(None, {"x_t": x.cpu().numpy(), "timestep": t.cpu().numpy()})[0]
     max_abs = float(np.max(np.abs(torch_out - ort_out)))
     return {
         "max_abs_diff": max_abs,
@@ -113,12 +111,8 @@ def validate_int8_cfg_parity(
     rng = np.random.default_rng(42)
     x = rng.normal(size=(8, latent_dim)).astype(np.float32)
     t = rng.integers(0, 1_000, size=(8,), dtype=np.int64)
-    fp32_session = ort.InferenceSession(
-        str(fp32_path), providers=["CPUExecutionProvider"]
-    )
-    int8_session = ort.InferenceSession(
-        str(int8_path), providers=["CPUExecutionProvider"]
-    )
+    fp32_session = ort.InferenceSession(str(fp32_path), providers=["CPUExecutionProvider"])
+    int8_session = ort.InferenceSession(str(int8_path), providers=["CPUExecutionProvider"])
     feeds = {
         fp32_session.get_inputs()[0].name: x,
         fp32_session.get_inputs()[1].name: t,

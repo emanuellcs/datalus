@@ -204,16 +204,16 @@ function decodeLatents(
 }
 
 function Component(props: { args: ComponentArgs }): JSX.Element {
-  const [status, setStatus] = React.useState("Pronto");
+  const [status, setStatus] = React.useState("Ready");
   React.useEffect(() => {
     Streamlit.setFrameHeight(96);
   }, []);
   const onClick = async () => {
     try {
-      setStatus("Executando no navegador...");
+      setStatus("Running in browser...");
       const records = await runDdim(props.args);
       Streamlit.setComponentValue({ status: "completed", records });
-      setStatus("Concluído");
+      setStatus("Done");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       Streamlit.setComponentValue({ status: "failed", error: message });
@@ -222,7 +222,7 @@ function Component(props: { args: ComponentArgs }): JSX.Element {
   };
   return (
     <div style={{ fontFamily: "system-ui, sans-serif", padding: "0.5rem 0" }}>
-      <button onClick={onClick}>Executar inferência local</button>
+      <button onClick={onClick}>Run local inference</button>
       <span style={{ marginLeft: "0.75rem" }}>{status}</span>
     </div>
   );

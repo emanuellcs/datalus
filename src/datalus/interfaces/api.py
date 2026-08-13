@@ -56,14 +56,10 @@ class CounterfactualRequest(GenerationRequest):
     interventions: dict[str, Any] = Field(default_factory=dict)
 
 
-def create_app(
-    registry_path: str | Path | None = None, enable_server_generation: bool = False
-) -> FastAPI:
+def create_app(registry_path: str | Path | None = None, enable_server_generation: bool = False) -> FastAPI:
     """Create an API that serves artifacts for browser-local inference."""
 
-    registry = Path(
-        registry_path or os.getenv("DATALUS_REGISTRY_PATH", "artifacts")
-    ).resolve()
+    registry = Path(registry_path or os.getenv("DATALUS_REGISTRY_PATH", "artifacts")).resolve()
     app = FastAPI(
         title="DATALUS Artifact Service",
         description="Serves ONNX artifacts and schema metadata for local browser inference.",
@@ -93,11 +89,7 @@ def create_app(
 
         if not registry.exists():
             return {"artifacts": []}
-        return {
-            "artifacts": sorted(
-                path.name for path in registry.iterdir() if path.is_dir()
-            )
-        }
+        return {"artifacts": sorted(path.name for path in registry.iterdir() if path.is_dir())}
 
     @app.get("/artifacts/{domain}/manifest")
     async def artifact_manifest(domain: str):
@@ -173,9 +165,7 @@ def create_app(
         """Append synthetic records to a dataset for a domain."""
 
         if not enable_server_generation:
-            raise HTTPException(
-                status_code=403, detail="Server-side generation is disabled."
-            )
+            raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
         from datalus.application.inference import augment_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
@@ -195,9 +185,7 @@ def create_app(
         """Rebalance a dataset toward a target class distribution for a domain."""
 
         if not enable_server_generation:
-            raise HTTPException(
-                status_code=403, detail="Server-side generation is disabled."
-            )
+            raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
         from datalus.application.inference import balance_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
@@ -220,9 +208,7 @@ def create_app(
         """Fill null values in a dataset using RePaint-style inpainting."""
 
         if not enable_server_generation:
-            raise HTTPException(
-                status_code=403, detail="Server-side generation is disabled."
-            )
+            raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
         from datalus.application.inference import inpaint_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
@@ -242,9 +228,7 @@ def create_app(
         """Generate counterfactual records under do-style interventions."""
 
         if not enable_server_generation:
-            raise HTTPException(
-                status_code=403, detail="Server-side generation is disabled."
-            )
+            raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
         from datalus.application.inference import counterfactual_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
@@ -280,9 +264,7 @@ def _model_paths(registry: Path, domain: str) -> tuple[Path, Path]:
     checkpoint = next((path for path in checkpoint_candidates if path.exists()), None)
     encoder = root / "encoder_config.json"
     if checkpoint is None or not encoder.exists():
-        raise HTTPException(
-            status_code=404, detail="Model checkpoint or encoder not found."
-        )
+        raise HTTPException(status_code=404, detail="Model checkpoint or encoder not found.")
     return checkpoint, encoder
 
 
