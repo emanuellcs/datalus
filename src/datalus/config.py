@@ -1,4 +1,4 @@
-"""Pydantic domain schemas shared across DATALUS layers."""
+"""Pydantic configuration and contract models shared across DATALUS."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class DomainModel(BaseModel):
-    """Base schema that forbids extra attributes and exposes JSON serialization."""
+class BaseConfig(BaseModel):
+    """Base contract that forbids extra attributes and exposes JSON serialization."""
 
     model_config = ConfigDict(extra="forbid", frozen=False)
 
@@ -18,7 +18,7 @@ class DomainModel(BaseModel):
         return self.model_dump(mode="json")
 
 
-class ColumnProfile(DomainModel):
+class ColumnProfile(BaseConfig):
     """Domain description of one column after topology inference."""
 
     column_name: str
@@ -36,7 +36,7 @@ class ColumnProfile(DomainModel):
     reason: str | None = None
 
 
-class RePaintConfig(DomainModel):
+class RePaintConfig(BaseConfig):
     """Inference policy for RePaint-style tabular inpainting."""
 
     num_inference_steps: int = Field(default=250, ge=1)
@@ -45,7 +45,7 @@ class RePaintConfig(DomainModel):
     eta: float = Field(default=0.0, ge=0.0)
 
 
-class PrivacyThresholds(DomainModel):
+class PrivacyThresholds(BaseConfig):
     """Approval thresholds for empirical privacy evidence."""
 
     memorization_ratio: float = Field(default=0.01, ge=0.0, le=1.0)
@@ -53,7 +53,7 @@ class PrivacyThresholds(DomainModel):
     dcr_percentile: float = Field(default=1.0, ge=0.0, le=100.0)
 
 
-class ShadowMIAConfig(DomainModel):
+class ShadowMIAConfig(BaseConfig):
     """Domain parameters for the black-box shadow-model MIA protocol."""
 
     mode: Literal["release", "ci_lite"] = "release"
@@ -68,7 +68,7 @@ class ShadowMIAConfig(DomainModel):
     random_state: int = 42
 
 
-class GenerationConfig(DomainModel):
+class GenerationConfig(BaseConfig):
     """User-facing generation policy shared by CLI and HTTP interfaces."""
 
     mode: Literal[
@@ -95,7 +95,7 @@ class BalancingConfig(GenerationConfig):
     strict: bool = False
 
 
-class TrainingConfig(DomainModel):
+class TrainingConfig(BaseConfig):
     """Use-case configuration for Colab-safe TabDDPM training."""
 
     schema_path: str

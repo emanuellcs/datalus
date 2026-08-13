@@ -1,7 +1,7 @@
 """Framework-independent diffusion schedule mathematics.
 
 This module avoids NumPy, PyTorch, and ONNX dependencies by returning plain
-Python floats and integers. Infrastructure adapters convert these values into
+Python floats and integers. The torch diffusion engine converts these values into
 framework tensors for training, export, or browser inference.
 """
 

@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-COPY frontend ./frontend
-RUN pip install ".[frontend]"
-RUN cd frontend/component && (npm ci || npm install) && npm run build
+COPY web ./web
+RUN pip install ".[web]"
+RUN cd web/component && (npm ci || npm install) && npm run build
 
 EXPOSE 8501
-CMD ["streamlit", "run", "frontend/streamlit/app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+CMD ["streamlit", "run", "web/streamlit/app.py", "--server.address=0.0.0.0", "--server.port=8501"]

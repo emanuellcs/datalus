@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 audit = ["lightgbm>=4.3", "catboost>=1.2"]
-frontend = ["streamlit>=1.36"]
+web = ["streamlit>=1.36"]
 training = ["torch>=2.3", "onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.1"]
 test = ["pytest>=8.2", "httpx>=0.27"]
 dev = [
@@ -43,7 +43,7 @@ dev = [
 ]
 
 [project.scripts]
-datalus = "datalus.interfaces.cli:app"
+datalus = "datalus.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

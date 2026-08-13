@@ -6,7 +6,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from datalus.interfaces.cli import (
+from datalus.cli import (
     _resolve_checkpoint_path,
     _validated_verbose,
     app,

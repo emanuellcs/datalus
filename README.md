@@ -56,7 +56,7 @@ Primary public-data references:
 | Training GPU | CPU works for tests | NVIDIA T4 15 GB VRAM or better | Multi-GPU supported via `DataParallel`. |
 | Training RAM | 8 GB | 16 GB or more | Lazy ingestion helps, but encoding and audit projection need memory. |
 | Browser inference | Modern Chromium, Firefox, or Edge | Browser with WebAssembly and Cache API | The React component uses `onnxruntime-web` WASM locally. |
-| Node.js | 20 in CI | 20 LTS | Frontend CI uses `actions/setup-node@v4` with Node 20. |
+| Node.js | 20 in CI | 20 LTS | Web CI uses `actions/setup-node@v4` with Node 20. |
 | Docker | Compose v2 | Docker Engine with Compose plugin | Compose starts the API and Streamlit containers. |
 
 Optional dependency groups are declared in `pyproject.toml`:
@@ -65,26 +65,31 @@ Optional dependency groups are declared in `pyproject.toml`:
 | --- | --- |
 | `training` | PyTorch, ONNX, ONNX Runtime, ONNX Script. |
 | `test` | Pytest and HTTPX for API tests. |
-| `frontend` | Streamlit runtime. |
+| `web` | Streamlit runtime. |
 | `audit` | LightGBM and CatBoost for heavier audit experiments. |
 | `dev` | Full local development stack. |
 
 ## Architecture
 
-The codebase uses a strict `src/` layout and Clean Architecture boundaries:
+The codebase uses a strict `src/` layout organized by feature:
 
 ```text
 src/datalus/
-  domain/            Framework-free schemas and diffusion schedule math
-  infrastructure/    Polars, PyTorch, ONNX, checkpointing, encoding adapters
-  application/       Training, inference, audit, and export use cases
-  interfaces/        Typer CLI and FastAPI delivery adapters
-frontend/
+  config.py          Pydantic contracts shared across features
+  cli.py             Typer CLI
+  api.py             FastAPI artifact service
+  export.py          ONNX export, INT8 quantization, parity guards
+  data/              Polars ingestion, reversible encoding, batched loading
+  models/            Neural components, diffusion engine, schedule math
+  training/          Trainer orchestration and deterministic checkpointing
+  generation/        Sample, augment, balance, inpaint, counterfactual, export workflows
+  audit/             Privacy (DCR, Shadow-MIA) and utility (TSTR/TRTR) audits
+web/
   streamlit/         Python Streamlit shell
   component/         React TypeScript ONNX Runtime Web component
 tests/               Unit and integration tests
 docker/              API and Streamlit Dockerfiles
-.github/workflows/   CI jobs for Python, frontend, and Docker builds
+.github/workflows/   CI jobs for Python, web, and Docker builds
 ```
 
 ```mermaid
@@ -100,15 +105,19 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G
 ```
 
-### Clean Architecture Responsibilities
+### Package Responsibilities
 
-| Layer | Source path | Responsibility |
+| Package | Source path | Responsibility |
 | --- | --- | --- |
-| Domain | `src/datalus/domain` | Pydantic contracts, diffusion schedule math, RePaint config, privacy thresholds. |
-| Infrastructure | `src/datalus/infrastructure` | Polars scanning, reversible encoders, PyTorch networks, diffusion tensors, checkpointing, ONNX export. |
-| Application | `src/datalus/application` | Training, sampling, augmentation, balancing, inpainting, counterfactuals, auditing, artifact export. |
-| Interfaces | `src/datalus/interfaces` | Typer CLI and FastAPI app. |
-| Frontend | `frontend` | Streamlit shell and React ONNX Runtime Web component. |
+| Config | `src/datalus/config.py` | Pydantic contracts: `TrainingConfig`, `RePaintConfig`, `PrivacyThresholds`, `ColumnProfile`. |
+| Data | `src/datalus/data` | Polars scanning, zero-shot schema inference, reversible encoders, batched loading. |
+| Models | `src/datalus/models` | Denoiser/projector/EMA networks, diffusion engine, beta/DDIM/RePaint schedule math. |
+| Training | `src/datalus/training` | Trainer loop, AMP, deterministic checkpoint save/restore/prune. |
+| Generation | `src/datalus/generation` | Ab-initio generation, augmentation, balancing, inpainting, counterfactuals, ONNX artifact export. |
+| Audit | `src/datalus/audit` | Privacy evaluators (DCR, Shadow-MIA) and utility evaluators (TSTR/TRTR, MLE-ratio). |
+| Export | `src/datalus/export.py` | ONNX export, INT8 quantization, and parity validation. |
+| Interfaces | `src/datalus/cli.py`, `src/datalus/api.py` | Typer CLI and FastAPI app. |
+| Web | `web` | Streamlit shell and React ONNX Runtime Web component. |
 
 ## Generative Capabilities
 
@@ -144,7 +153,7 @@ The notebooks are located in the `notebooks/` directory and are structured to ru
 
 ### Implemented Cosine Schedule
 
-The domain layer implements the Nichol-Dhariwal cosine schedule with numerical clipping. For training horizon $T$ and offset $s=0.008$:
+The schedule module (`src/datalus/models/schedules.py`) implements the Nichol-Dhariwal cosine schedule with numerical clipping. For training horizon $T$ and offset $s=0.008$:
 
 $$
 f(t)=\cos^2\left(\frac{t/T+s}{1+s}\frac{\pi}{2}\right)
@@ -352,17 +361,17 @@ For lighter roles:
 
 ```bash
 .venv/bin/python -m pip install -e '.[training,test]'
-.venv/bin/python -m pip install -e '.[frontend]'
+.venv/bin/python -m pip install -e '.[web]'
 ```
 
 `requirements.txt` is a compatibility shim generated from `pyproject.toml`; the authoritative dependency source is `pyproject.toml`.
 
-### Frontend Component
+### Web Component
 
-The Streamlit shell embeds the React component from `frontend/component/dist` when built. If the bundle is absent, the Python wrapper points to the Vite dev server at `http://localhost:5173`.
+The Streamlit shell embeds the React component from `web/component/dist` when built. If the bundle is absent, the Python wrapper points to the Vite dev server at `http://localhost:5173`.
 
 ```bash
-cd frontend/component
+cd web/component
 npm ci
 npm run test
 npm run build
@@ -371,7 +380,7 @@ npm run build
 For interactive component development:
 
 ```bash
-cd frontend/component
+cd web/component
 npm run dev
 ```
 
@@ -385,14 +394,14 @@ Then launch Streamlit separately:
 
 ```bash
 .venv/bin/python -m pytest -q
-cd frontend/component
+cd web/component
 npm run test
 npm run build
 ```
 
 ## Complete CLI Cheatsheet
 
-The Command Line Interface (CLI) is implemented with Typer in `src/datalus/interfaces/cli.py`. It is deliberately thin: commands translate user input into application use cases and print file locations.
+The Command Line Interface (CLI) is implemented with Typer in `src/datalus/cli.py`. It is deliberately thin: commands translate user input into high-level workflows and print file locations.
 
 ### End-to-End Workflow
 
@@ -439,7 +448,7 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | `audit` | `real_train_path`, `synthetic_path`, `schema_path`, `report_path` | `--target-column None`, `--real-holdout-path None`, `--mia-mode release` (`release` or `ci_lite`), `--max-audit-rows None` | Writes privacy JSON and utility JSON when target exists in both datasets. |
 | `export-onnx` | `checkpoint_path`, `encoder_path`, `output_dir` | `--quantize True` | Writes `model_fp32.onnx`, optional `model_int8.onnx`, `encoder_config.json`, `projector_config.json`, `manifest.json`. |
 | `serve` | `registry_path` default `artifacts` | `--host 0.0.0.0`, `--port 8000` | Starts Uvicorn factory app with `DATALUS_REGISTRY_PATH`. |
-| `streamlit` | None | None | Runs `streamlit run frontend/streamlit/app.py`. |
+| `streamlit` | None | None | Runs `streamlit run web/streamlit/app.py`. |
 
 ### Operational Notes by Command
 
@@ -709,8 +718,8 @@ Port mappings and volumes:
 
 | Service | Container command | Port mapping | Artifact volume |
 | --- | --- | --- | --- |
-| `api` | `uvicorn datalus.interfaces.api:app --host 0.0.0.0 --port 8000` | `8000:8000` | `./artifacts:/app/artifacts:ro` |
-| `streamlit` | `streamlit run frontend/streamlit/app.py --server.address=0.0.0.0 --server.port=8501` | `8501:8501` | `./artifacts:/app/artifacts:ro` |
+| `api` | `uvicorn datalus.api:app --host 0.0.0.0 --port 8000` | `8000:8000` | `./artifacts:/app/artifacts:ro` |
+| `streamlit` | `streamlit run web/streamlit/app.py --server.address=0.0.0.0 --server.port=8501` | `8501:8501` | `./artifacts:/app/artifacts:ro` |
 
 Environment variables:
 
@@ -728,7 +737,7 @@ GitHub Actions defines three jobs:
 | Job | Runtime | Commands |
 | --- | --- | --- |
 | `python-tests` | Ubuntu, Python 3.11, CPU Torch | `pip install ".[training,test]"`, `pytest`. |
-| `frontend-build` | Ubuntu, Node 20 | `npm install`, `npm run test`, `npm run build`. |
+| `web-build` | Ubuntu, Node 20 | `npm install`, `npm run test`, `npm run build`. |
 | `docker-build` | Ubuntu Docker | Build API and Streamlit images. |
 
 Dependabot is configured for weekly devcontainer updates. The devcontainer uses Debian with Python, Node, and Docker-outside-of-Docker features.

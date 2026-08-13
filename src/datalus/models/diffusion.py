@@ -1,7 +1,8 @@
-"""PyTorch diffusion infrastructure for DATALUS.
+"""PyTorch diffusion engine for DATALUS tabular latent vectors.
 
-The domain layer owns schedule policy and RePaint configuration. This module
-adapts those pure mathematical contracts to torch tensors and neural modules.
+The schedule policy and RePaint configuration live in ``datalus.models.schedules``
+and ``datalus.config``; this module adapts them to torch tensors and neural
+modules.
 """
 
 from __future__ import annotations
@@ -12,13 +13,13 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
-from datalus.domain.diffusion_math import (
+from datalus.config import RePaintConfig
+from datalus.models.schedules import (
     cosine_beta_schedule,
     linear_beta_schedule,
     make_ddim_timesteps,
     make_repaint_schedule,
 )
-from datalus.domain.schemas import RePaintConfig
 
 
 class VarianceSchedule(nn.Module):

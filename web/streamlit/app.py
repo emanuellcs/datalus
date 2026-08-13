@@ -8,7 +8,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from frontend.streamlit.component import run_browser_inference
+from web.streamlit.component import run_browser_inference
 
 st.set_page_config(page_title="DATALUS", layout="wide")
 
