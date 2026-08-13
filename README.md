@@ -433,13 +433,13 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | Command | Positional arguments | Options and defaults | Expected output |
 | --- | --- | --- | --- |
 | `ingest` | `input_path`, `output_path` | `--schema-path artifacts/schema_config.json`, `--target-column None` | Prints schema and processed Parquet paths. Writes Snappy Parquet and schema metadata. |
-| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
-| `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Writes synthetic Parquet with Snappy compression. |
-| `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0` | Writes original rows plus synthetic rows selected to original columns. |
-| `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--max-attempts 10`, `--strict False` | Writes Parquet approaching requested class counts. Raises if `--strict` and attempts are exhausted. |
-| `inpaint` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--ddim-steps 50`, `--jump-length 10`, `--jump-n-sample 10`, `--seed 42` | Writes Parquet with null-driven latent fields imputed. |
-| `counterfactual` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `intervention_json` | `--ddim-steps 50`, `--seed 42` | Writes Parquet under fixed intervention columns. |
-| `audit` | `real_train_path`, `synthetic_path`, `schema_path`, `report_path` | `--target-column None`, `--real-holdout-path None`, `--mia-mode release`, `--max-audit-rows None` | Writes privacy JSON and utility JSON when target exists in both datasets. |
+| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None`, `--keep-last None`, `--save-every 1`, `--checkpoint-every-steps 500`, `--save-strategy latest` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
+| `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--checkpoint-source latest` | Writes synthetic Parquet with Snappy compression. |
+| `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--checkpoint-source latest` | Writes original rows plus synthetic rows selected to original columns. |
+| `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--max-attempts 10`, `--strict False`, `--checkpoint-source latest` | Writes Parquet approaching requested class counts. Raises if `--strict` and attempts are exhausted. |
+| `inpaint` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--ddim-steps 50`, `--jump-length 10`, `--jump-n-sample 10`, `--seed 42`, `--checkpoint-source latest` | Writes Parquet with null-driven latent fields imputed. |
+| `counterfactual` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `intervention_json` | `--ddim-steps 50`, `--seed 42`, `--checkpoint-source latest` | Writes Parquet under fixed intervention columns. |
+| `audit` | `real_train_path`, `synthetic_path`, `schema_path`, `report_path` | `--target-column None`, `--real-holdout-path None`, `--mia-mode release` (`release` or `ci_lite`), `--max-audit-rows None` | Writes privacy JSON and utility JSON when target exists in both datasets. |
 | `export-onnx` | `checkpoint_path`, `encoder_path`, `output_dir` | `--quantize True` | Writes `model_fp32.onnx`, optional `model_int8.onnx`, `encoder_config.json`, `projector_config.json`, `manifest.json`. |
 | `serve` | `registry_path` default `artifacts` | `--host 0.0.0.0`, `--port 8000` | Starts Uvicorn factory app with `DATALUS_REGISTRY_PATH`. |
 | `streamlit` | None | None | Runs `streamlit run frontend/streamlit/app.py`. |
@@ -451,6 +451,8 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 - `ingest` drops sparse columns with null ratio above `0.95`, identifier-like names such as CPF/CNPJ/CNS/email/phone-like fields, free-text columns, and unsupported dtypes.
 - The underlying `ZeroShotPreprocessor` defaults are `high_cardinality_threshold=50`, `sample_size=100000`, `rare_category_threshold=5`, and null tokens `""`, `NA`, `N/A`, `null`, `NULL`, and `None`. The target column is protected from the sparse and identifier drop rules.
 - `train` currently exposes a subset of `TrainingConfig` on the CLI. Learning rate, weight decay, hidden dimensions, AMP, EMA, warmup, and maximum encoder fit rows are configured in `TrainingConfig` for programmatic use.
+- `train` checkpoint cadence is dual: `--save-every N` writes a checkpoint every `N` epochs, while `--checkpoint-every-steps N` writes one every `N` training steps. Either cadence triggers a save.
+- `sample`, `augment`, `balance`, `inpaint`, and `counterfactual` accept a `--checkpoint-source latest|best`. When `checkpoint_path` is a directory, the flag resolves `checkpoint_latest.pt` or `checkpoint_best.pt` inside it; a plain file path is used as-is.
 - `balance` treats JSON class labels as strings during matching, so numeric class labels should be represented as JSON object keys such as `{"0": 5000}`.
 - `counterfactual` interventions must reference retained columns from the fitted encoder. Unknown categorical values map to `__UNKNOWN__`.
 - `audit` reads Parquet eagerly. For large official release audits, run on a machine sized for the projected one-hot matrix.
@@ -528,7 +530,8 @@ Colab T4 sessions are useful for proof-of-concept training but should be treated
 
 ```python
 from google.colab import drive
-drive.mount('/content/drive')
+
+drive.mount("/content/drive")
 ```
 
 Recommended Drive layout:

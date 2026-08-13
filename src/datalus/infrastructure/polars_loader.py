@@ -12,6 +12,8 @@ class ChunkedParquetBatches:
     """Expose deterministic Parquet slices without materializing full datasets."""
 
     def __init__(self, path: str | Path, batch_size: int, seed: int) -> None:
+        """Open a lazy Parquet scan and record the total row count."""
+
         self.path = str(path)
         self.batch_size = batch_size
         self.seed = seed

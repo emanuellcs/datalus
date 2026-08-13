@@ -79,6 +79,8 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        """Return service status, uptime, and the resolved registry path."""
+
         return {
             "status": "operational",
             "uptime_seconds": round(time.time() - START_TIME, 3),
@@ -87,6 +89,8 @@ def create_app(
 
     @app.get("/artifacts")
     async def artifacts() -> dict[str, Any]:
+        """List the artifact domains under the registry."""
+
         if not registry.exists():
             return {"artifacts": []}
         return {
@@ -97,14 +101,20 @@ def create_app(
 
     @app.get("/artifacts/{domain}/manifest")
     async def artifact_manifest(domain: str):
+        """Return the manifest JSON for an artifact domain."""
+
         return _json_file(_domain_root(registry, domain) / "manifest.json")
 
     @app.get("/artifacts/{domain}/schema")
     async def artifact_schema(domain: str):
+        """Return the schema JSON for an artifact domain."""
+
         return _json_file(_domain_root(registry, domain) / "schema_config.json")
 
     @app.get("/artifacts/{domain}/{file_name}")
     async def artifact_file(domain: str, file_name: str):
+        """Serve an allow-listed artifact file for a domain."""
+
         allowed = {
             "model_fp32.onnx",
             "model_fp16.onnx",
@@ -125,6 +135,8 @@ def create_app(
 
     @app.get("/audit/latest")
     async def latest_audit():
+        """Return the most recently written audit report in the registry."""
+
         candidates = sorted(
             registry.glob("*/audit_report.json"),
             key=lambda p: p.stat().st_mtime,
@@ -136,6 +148,8 @@ def create_app(
 
     @app.post("/generate")
     async def generate(request: GenerationRequest):
+        """Generate synthetic records for a domain when server generation is enabled."""
+
         if not enable_server_generation:
             raise HTTPException(
                 status_code=403,
@@ -156,6 +170,8 @@ def create_app(
 
     @app.post("/augment")
     async def augment(request: AugmentationRequest):
+        """Append synthetic records to a dataset for a domain."""
+
         if not enable_server_generation:
             raise HTTPException(
                 status_code=403, detail="Server-side generation is disabled."
@@ -176,6 +192,8 @@ def create_app(
 
     @app.post("/balance")
     async def balance(request: BalancingRequest):
+        """Rebalance a dataset toward a target class distribution for a domain."""
+
         if not enable_server_generation:
             raise HTTPException(
                 status_code=403, detail="Server-side generation is disabled."
@@ -199,6 +217,8 @@ def create_app(
 
     @app.post("/inpaint")
     async def inpaint(request: InpaintingRequest):
+        """Fill null values in a dataset using RePaint-style inpainting."""
+
         if not enable_server_generation:
             raise HTTPException(
                 status_code=403, detail="Server-side generation is disabled."
@@ -219,6 +239,8 @@ def create_app(
 
     @app.post("/counterfactual")
     async def counterfactual(request: CounterfactualRequest):
+        """Generate counterfactual records under do-style interventions."""
+
         if not enable_server_generation:
             raise HTTPException(
                 status_code=403, detail="Server-side generation is disabled."
@@ -240,6 +262,8 @@ def create_app(
 
 
 def _json_file(path: Path) -> JSONResponse:
+    """Return a JSON artifact as a response, or 404 when it is missing."""
+
     if not path.exists():
         raise HTTPException(status_code=404, detail="JSON artifact not found.")
     return JSONResponse(content=json.loads(path.read_text(encoding="utf-8")))

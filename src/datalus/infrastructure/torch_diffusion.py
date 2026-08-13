@@ -28,6 +28,8 @@ class VarianceSchedule(nn.Module):
     def __init__(
         self, num_timesteps: int = 1_000, schedule_type: str = "cosine"
     ) -> None:
+        """Build a schedule and precompute its cumulative alpha buffers."""
+
         super().__init__()
         self.num_timesteps = num_timesteps
         if schedule_type == "linear":
@@ -52,10 +54,14 @@ class VarianceSchedule(nn.Module):
         )
 
     def extract(self, values: Tensor, t: Tensor, x_shape: torch.Size) -> Tensor:
+        """Gather per-timestep values and reshape them for elementwise use."""
+
         out = values.gather(0, t)
         return out.reshape(t.shape[0], *((1,) * (len(x_shape) - 1)))
 
     def alpha_bar_at(self, timestep: int | Tensor, device: torch.device) -> Tensor:
+        """Return the cumulative alpha for a timestep on the given device."""
+
         if isinstance(timestep, Tensor):
             return self.alphas_cumprod[timestep].to(device)
         if timestep < 0:
@@ -73,6 +79,8 @@ class TabularDiffusion(nn.Module):
         schedule_type: str = "cosine",
         condition_dropout: float = 0.1,
     ) -> None:
+        """Initialize diffusion with a denoiser and a variance schedule."""
+
         super().__init__()
         self.denoiser = denoiser
         self.num_timesteps = num_timesteps
@@ -82,6 +90,8 @@ class TabularDiffusion(nn.Module):
     def q_sample(
         self, x_start: Tensor, t: Tensor, noise: Tensor | None = None
     ) -> Tensor:
+        """Corrupt a clean latent to timestep t with the forward diffusion formula."""
+
         if noise is None:
             noise = torch.randn_like(x_start)
         sqrt_alpha = self.schedule.extract(
@@ -97,6 +107,8 @@ class TabularDiffusion(nn.Module):
     def compute_loss(
         self, x_start: Tensor, context: Tensor | None = None
     ) -> dict[str, Tensor]:
+        """Return the MSE noise-prediction loss for a random diffusion step."""
+
         batch_size = x_start.shape[0]
         device = x_start.device
         t = torch.randint(
@@ -114,6 +126,8 @@ class TabularDiffusion(nn.Module):
     def forward(
         self, x_start: Tensor, context: Tensor | None = None
     ) -> dict[str, Tensor]:
+        """Alias forward() to compute_loss for a standard training call."""
+
         return self.compute_loss(x_start, context)
 
     @torch.no_grad()
@@ -125,6 +139,8 @@ class TabularDiffusion(nn.Module):
         cfg_scale: float = 1.0,
         group_guidance: list[dict[str, Any]] | None = None,
     ) -> Tensor:
+        """Predict noise with classifier-free guidance when a context is given."""
+
         if context is None or cfg_scale == 1.0:
             return self.denoiser(x, t, context)
         uncond = self.denoiser(x, t, torch.zeros_like(context))
@@ -151,6 +167,8 @@ class TabularDiffusion(nn.Module):
         eta: float = 0.0,
         group_guidance: list[dict[str, Any]] | None = None,
     ) -> Tensor:
+        """Advance a latent one DDIM step from t_value to prev_t_value."""
+
         batch_size = x.shape[0]
         device = x.device
         t = torch.full((batch_size,), t_value, device=device, dtype=torch.long)
@@ -184,6 +202,8 @@ class TabularDiffusion(nn.Module):
         eta: float = 0.0,
         group_guidance: list[dict[str, Any]] | None = None,
     ) -> Tensor:
+        """Sample a latent from Gaussian noise with reverse DDIM steps."""
+
         generator = None
         if seed is not None:
             generator = torch.Generator(device=device).manual_seed(seed)

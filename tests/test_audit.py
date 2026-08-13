@@ -1,3 +1,5 @@
+"""Tests for the privacy and shadow MIA audit pipeline."""
+
 import polars as pl
 
 from datalus.application.audit import PrivacyEvaluator
@@ -5,6 +7,8 @@ from datalus.domain.schemas import PrivacyThresholds, ShadowMIAConfig
 
 
 def test_privacy_audit_report_has_dcr_and_shadow_mia():
+    """The privacy report includes DCR and Shadow MIA metrics."""
+
     real = pl.DataFrame(
         {
             "age": [20, 30, 40, 50, 60, 70, 80, 90],
@@ -35,6 +39,8 @@ def test_privacy_audit_report_has_dcr_and_shadow_mia():
 
 
 def test_shadow_mia_ci_lite_uses_bounded_fast_configuration():
+    """CI-lite mode caps shadow models for a fast bounded run."""
+
     real = pl.DataFrame(
         {
             "age": [20, 30, 40, 50, 60, 70, 80, 90],

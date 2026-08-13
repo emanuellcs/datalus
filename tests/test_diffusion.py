@@ -1,3 +1,5 @@
+"""Tests for diffusion sampling, inpainting, and RePaint schedules."""
+
 import torch
 
 from datalus.domain.diffusion_math import make_repaint_schedule
@@ -7,6 +9,8 @@ from datalus.infrastructure.torch_nn import TabularDenoiserMLP
 
 
 def test_ddim_and_repaint_shapes_are_stable():
+    """Sampling and inpainting preserve the latent shape and known values."""
+
     torch.manual_seed(0)
     denoiser = TabularDenoiserMLP(d_in=4, hidden_dims=(8, 8), dim_t=16)
     diffusion = TabularDiffusion(denoiser, num_timesteps=20)
@@ -26,6 +30,8 @@ def test_ddim_and_repaint_shapes_are_stable():
 
 
 def test_repaint_schedule_contains_forward_jumps():
+    """The RePaint schedule includes forward jumps and ends at -1."""
+
     schedule = make_repaint_schedule(100, 20, jump_length=5, jump_n_sample=2)
     assert any(next_step > step for step, next_step in zip(schedule, schedule[1:]))
     assert schedule[-1] == -1

@@ -138,7 +138,7 @@ def inpaint_records(
     jump_n_sample: int,
     seed: int,
 ) -> pl.DataFrame:
-    """Fill null values in tabular records with RePaint-style mask harmonization."""
+    """Fill null values in tabular records with RePaint-style masks."""
 
     diffusion, projector, encoder, device = load_model_bundle(
         checkpoint_path, encoder_path

@@ -8,6 +8,7 @@ modules, and checkpoint persistence.
 from __future__ import annotations
 
 import os
+import sys
 import hashlib
 import json
 import logging
@@ -16,16 +17,21 @@ from typing import Any
 
 import polars as pl
 import torch
+from rich.progress import Progress
 from torch.optim import AdamW
+
+from datalus._console import console as _shared_console
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from datalus.domain.schemas import TrainingConfig
 from datalus.infrastructure.checkpointing import (
     capture_rng_state,
     load_checkpoint,
+    prune_checkpoints,
     restore_rng_state,
     save_checkpoint,
     seed_everything,
+    update_best_checkpoint,
 )
 from datalus.infrastructure.encoding import TabularEncoder
 from datalus.infrastructure.polars_loader import ChunkedParquetBatches
@@ -39,6 +45,8 @@ class DatalusTrainer:
     """Training orchestrator with deterministic checkpointing and AMP."""
 
     def __init__(self, config: TrainingConfig) -> None:
+        """Build the trainer and prepare models, optimizer, and scheduler."""
+
         if config.gpu is not None:
             os.environ["CUDA_VISIBLE_DEVICES"] = config.gpu
 
@@ -108,6 +116,8 @@ class DatalusTrainer:
         self.loss_history: list[float] = []
 
     def _fit_encoder(self) -> TabularEncoder:
+        """Fit a reversible encoder on a bounded sample of the training data."""
+
         sample = (
             pl.scan_parquet(self.config.data_path)
             .head(self.config.max_encoder_fit_rows)
@@ -117,6 +127,8 @@ class DatalusTrainer:
         return encoder.fit(sample)
 
     def resume(self, checkpoint_path: str | Path) -> None:
+        """Restore model, optimizer, scheduler, and RNG state from a checkpoint."""
+
         checkpoint = load_checkpoint(checkpoint_path, map_location=self.device)
         getattr(self.diffusion, "module", self.diffusion).load_state_dict(
             checkpoint["diffusion_state"]
@@ -135,29 +147,102 @@ class DatalusTrainer:
         restore_rng_state(checkpoint["rng_state"])
 
     def train(self, max_steps: int | None = None) -> Path:
+        """Run the full training loop and return the final checkpoint path."""
+
         self.diffusion.train()
         self.projector.train()
-        for epoch in range(self.start_epoch, self.config.epochs):
-            offsets = self.batches.offsets_for_epoch(epoch)
-            batch_start = self.start_batch_index if epoch == self.start_epoch else 0
-            for batch_index, offset in enumerate(
-                offsets[batch_start:], start=batch_start
-            ):
-                loss_value = self._train_batch(self.batches.read_offset(offset))
-                self.loss_history.append(loss_value)
-                self.global_step += 1
-                if self.global_step % self.config.checkpoint_every_steps == 0:
-                    self.save_checkpoint(epoch, batch_index + 1, loss_value)
-                if max_steps is not None and self.global_step >= max_steps:
-                    return self.save_checkpoint(
-                        epoch, batch_index + 1, loss_value, name="checkpoint_latest.pt"
+
+        # Detect an interactive terminal for live progress rendering.
+        show_progress = sys.stdout.isatty()
+
+        with Progress(console=_shared_console, disable=not show_progress) as progress:
+            epoch_task = progress.add_task(
+                f"[bold cyan]Training[/bold cyan] {self.config.epochs} epochs",
+                total=self.config.epochs,
+            )
+
+            for epoch in range(self.start_epoch, self.config.epochs):
+                logger.info(
+                    f"Epoch {epoch + 1}/{self.config.epochs} "
+                    f"(global_step={self.global_step})"
+                )
+                offsets = self.batches.offsets_for_epoch(epoch)
+                batch_start = self.start_batch_index if epoch == self.start_epoch else 0
+
+                batch_task = progress.add_task(
+                    f"  [cyan]Batches[/cyan]",
+                    total=len(offsets),
+                    visible=show_progress,
+                )
+
+                for batch_index, offset in enumerate(
+                    offsets[batch_start:], start=batch_start
+                ):
+                    loss_value = self._train_batch(self.batches.read_offset(offset))
+                    self.loss_history.append(loss_value)
+                    self.global_step += 1
+
+                    logger.debug(
+                        f"Step {self.global_step}: loss={loss_value:.6f}, "
+                        f"lr={self.optimizer.param_groups[0]['lr']:.2e}"
                     )
+
+                    # Save on the epoch cadence, the step cadence, or both.
+                    epoch_cadence = (
+                        self.config.save_every > 0
+                        and epoch % self.config.save_every == 0
+                    )
+                    step_cadence = (
+                        self.config.checkpoint_every_steps > 0
+                        and self.global_step % self.config.checkpoint_every_steps == 0
+                    )
+                    if epoch_cadence or step_cadence:
+                        self.save_checkpoint(epoch, batch_index + 1, loss_value)
+                        logger.info(
+                            f"Checkpoint saved at step {self.global_step}, "
+                            f"loss={loss_value:.6f}"
+                        )
+
+                    if max_steps is not None and self.global_step >= max_steps:
+                        logger.info(
+                            f"Reached max_steps={max_steps}. Stopping training."
+                        )
+                        return self.save_checkpoint(
+                            epoch,
+                            batch_index + 1,
+                            loss_value,
+                            name="checkpoint_latest.pt",
+                        )
+
+                    if show_progress:
+                        progress.update(batch_task, advance=1)
+
+                if show_progress:
+                    progress.update(batch_task, visible=False)
+                    progress.update(epoch_task, advance=1)
+
             self.start_batch_index = 0
+
+        if not self.loss_history:
+            raise RuntimeError(
+                "No training batches were processed. Check that the dataset is "
+                "not empty and that the batch size does not exceed the row count."
+            )
+
+        logger.info(
+            f"Training complete. Final loss: {self.loss_history[-1]:.6f}. "
+            f"Total steps: {self.global_step}"
+        )
         return self.save_checkpoint(
-            self.config.epochs, 0, self.loss_history[-1], name="checkpoint_latest.pt"
+            self.config.epochs,
+            0,
+            self.loss_history[-1],
+            name="checkpoint_latest.pt",
         )
 
     def _train_batch(self, frame: pl.DataFrame) -> float:
+        """Train on one batch and return the detached scalar loss."""
+
         encoded = self.encoder.transform(frame)
         x_num = (
             torch.from_numpy(encoded.x_num).to(self.device, non_blocking=True)
@@ -194,6 +279,8 @@ class DatalusTrainer:
         loss: float,
         name: str | None = None,
     ) -> Path:
+        """Write a checkpoint and maintain latest, best, and retention files."""
+
         checkpoint_name = name or f"checkpoint_step_{self.global_step:08d}.pt"
         path = self.checkpoint_dir / checkpoint_name
         payload = {
@@ -217,12 +304,22 @@ class DatalusTrainer:
             "rng_state": capture_rng_state(),
         }
         save_checkpoint(path, payload)
+
         latest = self.checkpoint_dir / "checkpoint_latest.pt"
         if latest != path:
             save_checkpoint(latest, payload)
+
+        if self.config.save_strategy == "best":
+            update_best_checkpoint(self.checkpoint_dir, loss, path)
+
+        if self.config.keep_last is not None:
+            prune_checkpoints(self.checkpoint_dir, self.config.keep_last)
+
         return path
 
 
 def _config_hash(config: dict[str, Any]) -> str:
+    """Return a stable SHA-256 hash of the serialized training config."""
+
     serialized = json.dumps(config, sort_keys=True, default=str).encode("utf-8")
     return hashlib.sha256(serialized).hexdigest()

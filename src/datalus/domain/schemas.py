@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class DomainModel(BaseModel):
-    """Base schema configured for immutable, explicit domain data."""
+    """Base schema that forbids extra attributes and exposes JSON serialization."""
 
     model_config = ConfigDict(extra="forbid", frozen=False)
 
@@ -117,4 +117,16 @@ class TrainingConfig(DomainModel):
     max_encoder_fit_rows: int = Field(default=100_000, ge=1)
     gpu: str | None = Field(
         default=None, description="CUDA device indices, e.g., '0' or '0,1'"
+    )
+    keep_last: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum number of recent checkpoints to keep (None = keep all)",
+    )
+    save_every: int = Field(
+        default=1, ge=1, description="Save checkpoint every N epochs"
+    )
+    save_strategy: Literal["all", "latest", "best"] = Field(
+        default="latest",
+        description="Checkpoint strategy: 'all' (keep all), 'latest' (rolling), 'best' (track lowest loss)",
     )
