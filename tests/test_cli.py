@@ -1,5 +1,6 @@
 """CLI delivery-adapter tests using typer's CliRunner."""
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -10,6 +11,12 @@ from datalus.interfaces.cli import (
     _validated_verbose,
     app,
 )
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    return ANSI_ESCAPE.sub("", text)
 
 runner = CliRunner()
 
@@ -117,9 +124,10 @@ def test_invalid_checkpoint_source_is_rejected():
 def test_train_help_exposes_checkpoint_cadence_flags():
     result = runner.invoke(app, ["train", "--help"])
     assert result.exit_code == 0
-    assert "--checkpoint-every-steps" in result.output
-    assert "--save-every" in result.output
-    assert "every N epochs" in result.output
+    output = _strip_ansi(result.output)
+    assert "--checkpoint-every-steps" in output
+    assert "--save-every" in output
+    assert "every N epochs" in output
 
 
 def test_resolve_checkpoint_path_with_directory(tmp_path):
