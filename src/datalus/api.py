@@ -147,7 +147,7 @@ def create_app(registry_path: str | Path | None = None, enable_server_generation
                 status_code=403,
                 detail="Server-side generation is disabled. Use the browser ONNX Runtime Web component.",
             )
-        from datalus.application.inference import sample_records
+        from datalus.generation import sample_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
         frame = sample_records(
@@ -166,7 +166,7 @@ def create_app(registry_path: str | Path | None = None, enable_server_generation
 
         if not enable_server_generation:
             raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
-        from datalus.application.inference import augment_records
+        from datalus.generation import augment_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
         frame = augment_records(
@@ -186,7 +186,7 @@ def create_app(registry_path: str | Path | None = None, enable_server_generation
 
         if not enable_server_generation:
             raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
-        from datalus.application.inference import balance_records
+        from datalus.generation import balance_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
         frame = balance_records(
@@ -209,7 +209,7 @@ def create_app(registry_path: str | Path | None = None, enable_server_generation
 
         if not enable_server_generation:
             raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
-        from datalus.application.inference import inpaint_records
+        from datalus.generation import inpaint_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
         frame = inpaint_records(
@@ -229,7 +229,7 @@ def create_app(registry_path: str | Path | None = None, enable_server_generation
 
         if not enable_server_generation:
             raise HTTPException(status_code=403, detail="Server-side generation is disabled.")
-        from datalus.application.inference import counterfactual_records
+        from datalus.generation import counterfactual_records
 
         checkpoint, encoder = _model_paths(registry, request.domain)
         frame = counterfactual_records(

@@ -4,10 +4,10 @@ from itertools import pairwise
 
 import torch
 
-from datalus.domain.diffusion_math import make_repaint_schedule
-from datalus.domain.schemas import RePaintConfig
-from datalus.infrastructure.torch_diffusion import TabularDiffusion
-from datalus.infrastructure.torch_nn import TabularDenoiserMLP
+from datalus.config import RePaintConfig
+from datalus.models.diffusion import TabularDiffusion
+from datalus.models.nn import TabularDenoiserMLP
+from datalus.models.schedules import make_repaint_schedule
 
 
 def test_ddim_and_repaint_shapes_are_stable():

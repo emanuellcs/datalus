@@ -1,4 +1,4 @@
-"""Polars batch-loading adapters used by application use cases."""
+"""Polars batch loading for the training loop."""
 
 from __future__ import annotations
 

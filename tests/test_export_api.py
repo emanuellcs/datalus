@@ -6,13 +6,13 @@ import pytest
 import torch
 from fastapi.testclient import TestClient
 
-from datalus.infrastructure.onnx_export import (
+from datalus.api import create_app
+from datalus.export import (
     export_denoiser_onnx,
     quantize_int8,
     validate_int8_cfg_parity,
 )
-from datalus.infrastructure.torch_nn import TabularDenoiserMLP
-from datalus.interfaces.api import create_app
+from datalus.models.nn import TabularDenoiserMLP
 
 
 def test_artifact_api_serves_manifest(tmp_path):

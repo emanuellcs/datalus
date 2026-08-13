@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from datalus.infrastructure.checkpointing import (
+from datalus.training.checkpointing import (
     capture_rng_state,
     load_checkpoint,
     prune_checkpoints,

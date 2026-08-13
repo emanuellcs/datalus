@@ -1,7 +1,7 @@
 """Shared Rich console and logging configuration for DATALUS.
 
-This module provides a single `Console` instance shared across all layers
-(CLI, application, infrastructure) so that Rich's ``Progress`` live display
+This module provides a single `Console` instance shared across the package
+(CLI, training, generation) so that Rich's ``Progress`` live display
 and ``RichHandler`` logging never fight over terminal output.
 
 It also exposes ``setup_logging`` and the ``VERBOSE_CHOICES`` constant so that

@@ -1,8 +1,8 @@
-"""Training use case for DATALUS.
+"""Training orchestration for DATALUS.
 
-The application layer coordinates the training workflow but delegates all
-framework-specific work to infrastructure adapters: Polars loaders, PyTorch
-modules, and checkpoint persistence.
+The trainer coordinates the training loop but delegates framework-specific work
+to the feature modules: Polars data loading, PyTorch networks, the diffusion
+engine, and checkpoint persistence.
 """
 
 from __future__ import annotations
@@ -22,8 +22,12 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from datalus._console import console as _shared_console
-from datalus.domain.schemas import TrainingConfig
-from datalus.infrastructure.checkpointing import (
+from datalus.config import TrainingConfig
+from datalus.data.encoding import TabularEncoder
+from datalus.data.loader import ChunkedParquetBatches
+from datalus.models.diffusion import TabularDiffusion
+from datalus.models.nn import EMA, FeatureProjector, TabularDenoiserMLP
+from datalus.training.checkpointing import (
     capture_rng_state,
     load_checkpoint,
     prune_checkpoints,
@@ -32,10 +36,6 @@ from datalus.infrastructure.checkpointing import (
     seed_everything,
     update_best_checkpoint,
 )
-from datalus.infrastructure.encoding import TabularEncoder
-from datalus.infrastructure.polars_loader import ChunkedParquetBatches
-from datalus.infrastructure.torch_diffusion import TabularDiffusion
-from datalus.infrastructure.torch_nn import EMA, FeatureProjector, TabularDenoiserMLP
 
 logger = logging.getLogger(__name__)
 

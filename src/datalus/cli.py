@@ -1,7 +1,7 @@
-"""CLI delivery adapter with enterprise-grade help system and verbosity control.
+"""Typer CLI with help system and verbosity control.
 
 The command line interface is deliberately thin. It translates user input into
-application use-case calls, then reports file locations and audit outcomes. The
+high-level workflow calls, then reports file locations and audit outcomes. The
 CLI does not own PyTorch, ONNX, or Polars workflow logic.
 """
 
@@ -15,12 +15,10 @@ import polars as pl
 import typer
 
 from datalus._console import VERBOSE_CHOICES, setup_logging
-from datalus.application.audit import (
-    PrivacyEvaluator,
-    UtilityEvaluator,
-    write_audit_report,
-)
-from datalus.application.inference import (
+from datalus.audit import PrivacyEvaluator, UtilityEvaluator, write_audit_report
+from datalus.config import ShadowMIAConfig, TrainingConfig
+from datalus.data.ingestion import ZeroShotPreprocessor
+from datalus.generation import (
     augment_records,
     balance_records,
     counterfactual_records,
@@ -28,9 +26,7 @@ from datalus.application.inference import (
     inpaint_records,
     sample_records,
 )
-from datalus.application.training import DatalusTrainer
-from datalus.domain.schemas import ShadowMIAConfig, TrainingConfig
-from datalus.infrastructure.polars_preprocessing import ZeroShotPreprocessor
+from datalus.training import DatalusTrainer
 
 # ============================================================================
 # Logger
@@ -670,7 +666,7 @@ def serve(
 
     os.environ["DATALUS_REGISTRY_PATH"] = str(registry_path)
     uvicorn.run(
-        "datalus.interfaces.api:create_app",
+        "datalus.api:create_app",
         host=host,
         port=port,
         factory=True,
@@ -700,7 +696,7 @@ def streamlit_app(
     import subprocess
 
     subprocess.run(
-        ["streamlit", "run", "frontend/streamlit/app.py"],
+        ["streamlit", "run", "web/streamlit/app.py"],
         check=True,
     )
 

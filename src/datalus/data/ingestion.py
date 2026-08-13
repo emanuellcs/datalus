@@ -1,9 +1,8 @@
-"""Polars-backed ingestion infrastructure.
+"""Polars-backed ingestion: zero-shot schema inference and file scanning.
 
-Note:
-    This adapter is the only layer that knows how to scan CSV, Parquet, and ORC
-    files with Polars. It emits pure domain `ColumnProfile` objects so upstream
-    application code is insulated from the dataframe engine.
+Scans CSV, Parquet, and ORC files with Polars, infers a schema topology, and
+materializes safe Parquet outputs. Emits ``ColumnProfile`` contracts from
+``datalus.config`` so downstream code is insulated from the dataframe engine.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from typing import Any
 
 import polars as pl
 
-from datalus.domain.schemas import ColumnProfile
+from datalus.config import ColumnProfile
 
 logger = logging.getLogger(__name__)
 
