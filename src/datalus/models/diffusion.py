@@ -72,14 +72,32 @@ class TabularDiffusion(nn.Module):
         num_timesteps: int = 1_000,
         schedule_type: str = "cosine",
         condition_dropout: float = 0.1,
+        num_dim: int | None = None,
+        cat_dims: list[tuple[int, int]] | None = None,
+        lambda_num: float = 1.0,
+        lambda_cat: float = 0.0,
     ) -> None:
-        """Initialize diffusion with a denoiser and a variance schedule."""
+        """Initialize diffusion with a denoiser and a variance schedule.
+
+        ``num_dim`` and ``cat_dims`` enable the TabDDPM composite objective
+        when the denoiser exposes categorical logit heads.
+        """
 
         super().__init__()
         self.denoiser = denoiser
         self.num_timesteps = num_timesteps
         self.condition_dropout = condition_dropout
+        self.num_dim = num_dim
+        self.cat_dims = list(cat_dims or [])
+        self.lambda_num = lambda_num
+        self.lambda_cat = lambda_cat
         self.schedule = VarianceSchedule(num_timesteps, schedule_type)
+
+    @staticmethod
+    def _noise_of(output: Tensor | dict[str, Tensor]) -> Tensor:
+        """Extract the noise tensor from a denoiser output dict or plain tensor."""
+
+        return output["noise"] if isinstance(output, dict) else output
 
     def q_sample(self, x_start: Tensor, t: Tensor, noise: Tensor | None = None) -> Tensor:
         """Corrupt a clean latent to timestep t with the forward diffusion formula."""
@@ -94,8 +112,17 @@ class TabularDiffusion(nn.Module):
         )
         return sqrt_alpha * x_start + sqrt_one_minus * noise
 
-    def compute_loss(self, x_start: Tensor, context: Tensor | None = None) -> dict[str, Tensor]:
-        """Return the MSE noise-prediction loss for a random diffusion step."""
+    def compute_loss(
+        self,
+        x_start: Tensor,
+        x_cat: Tensor | None = None,
+        context: Tensor | None = None,
+    ) -> dict[str, Tensor]:
+        """Return the diffusion loss for a random diffusion step.
+
+        MSE over the full latent, plus categorical cross-entropy when the
+        denoiser exposes logit heads and ``lambda_cat > 0``.
+        """
 
         batch_size = x_start.shape[0]
         device = x_start.device
@@ -105,14 +132,37 @@ class TabularDiffusion(nn.Module):
         if context is not None and self.condition_dropout > 0:
             keep = torch.rand((batch_size, 1), device=device) >= self.condition_dropout
             context = torch.where(keep, context, torch.zeros_like(context))
-        predicted_noise = self.denoiser(x_noisy, t, context)
-        loss = F.mse_loss(predicted_noise, noise)
-        return {"loss": loss, "mse": loss.detach()}
+        predicted = self.denoiser(x_noisy, t, context)
+        predicted_noise = self._noise_of(predicted)
+        mse = F.mse_loss(predicted_noise, noise)
+        loss = mse
+        cat_ce = None
+        if (
+            self.lambda_cat > 0
+            and x_cat is not None
+            and isinstance(predicted, dict)
+        ):
+            logits = predicted["cat_logits"]
+            cat_losses = [
+                F.cross_entropy(logits[idx], x_cat[:, idx])
+                for idx in range(len(logits))
+            ]
+            cat_ce = torch.stack(cat_losses).mean()
+            loss = self.lambda_num * mse + self.lambda_cat * cat_ce
+        metrics: dict[str, Tensor] = {"loss": loss, "mse": mse.detach()}
+        if cat_ce is not None:
+            metrics["cat_ce"] = cat_ce.detach()
+        return metrics
 
-    def forward(self, x_start: Tensor, context: Tensor | None = None) -> dict[str, Tensor]:
+    def forward(
+        self,
+        x_start: Tensor,
+        x_cat: Tensor | None = None,
+        context: Tensor | None = None,
+    ) -> dict[str, Tensor]:
         """Alias forward() to compute_loss for a standard training call."""
 
-        return self.compute_loss(x_start, context)
+        return self.compute_loss(x_start, x_cat, context)
 
     @torch.no_grad()
     def predict_noise_cfg(
@@ -126,18 +176,18 @@ class TabularDiffusion(nn.Module):
         """Predict noise with classifier-free guidance when a context is given."""
 
         if context is None or cfg_scale == 1.0:
-            return self.denoiser(x, t, context)
-        uncond = self.denoiser(x, t, torch.zeros_like(context))
+            return self._noise_of(self.denoiser(x, t, context))
+        uncond = self._noise_of(self.denoiser(x, t, torch.zeros_like(context)))
         if group_guidance:
             guided = uncond
             for group in group_guidance:
                 mask = group["mask"].to(device=context.device, dtype=context.dtype)
                 scale = float(group["scale"])
                 group_context = context * mask
-                cond_group = self.denoiser(x, t, group_context)
+                cond_group = self._noise_of(self.denoiser(x, t, group_context))
                 guided = guided + scale * (cond_group - uncond)
             return guided
-        cond = self.denoiser(x, t, context)
+        cond = self._noise_of(self.denoiser(x, t, context))
         return uncond + cfg_scale * (cond - uncond)
 
     @torch.no_grad()

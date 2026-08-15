@@ -112,6 +112,11 @@ class TabularDenoiserMLP(nn.Module):
     def forward(self, x: Tensor, t: Tensor, c: Tensor | None = None) -> Tensor:
         """Predict the noise for a latent vector given a timestep and context."""
 
+        return self.forward_with_hidden(x, t, c)[0]
+
+    def forward_with_hidden(self, x: Tensor, t: Tensor, c: Tensor | None = None) -> tuple[Tensor, Tensor]:
+        """Predict noise and the pre-readout hidden for categorical logit heads."""
+
         t_emb = self.time_embed(t)
         if self.context_proj is not None:
             if c is None:
@@ -120,7 +125,9 @@ class TabularDenoiserMLP(nn.Module):
         h = self.input_proj(x)
         for block in self.blocks:
             h = block(h, t_emb)
-        return self.final(h)
+        h = self.final[0](h)
+        h = self.final[1](h)
+        return self.final[2](h), h
 
 
 class FeatureProjector(nn.Module):
@@ -167,6 +174,11 @@ class FeatureProjector(nn.Module):
             ],
             "latent_dim": self.total_latent_dim,
             "embeddings": [embedding.weight.detach().cpu().float().tolist() for embedding in self.embeddings],
+            "augmented_columns": [
+                column
+                for column in self.numerical_columns
+                if self.schema_metadata.get(column, {}).get("augmented", False)
+            ],
         }
 
     def forward(self, x_num: Tensor | None, x_cat: Tensor | None) -> Tensor:
@@ -208,6 +220,84 @@ class FeatureProjector(nn.Module):
         if not self.num_dim:
             return None
         return latent[:, : self.num_dim]
+
+
+class CategoricalHeadedDenoiser(nn.Module):
+    """Categorical logit heads for the TabDDPM composite objective.
+
+    Wraps a base denoiser and returns ``{"noise": ..., "cat_logits": [...]}``
+    without changing the noise path.
+    """
+
+    def __init__(self, base: nn.Module, cat_cardinalities: list[int], hidden_dim: int) -> None:
+        """Wrap a base denoiser and attach one logit head per categorical column."""
+
+        super().__init__()
+        if not cat_cardinalities:
+            raise ValueError("cat_cardinalities must not be empty.")
+        self.base = base
+        self.hidden_dim = hidden_dim
+        self.cat_heads = nn.ModuleList(
+            nn.Linear(hidden_dim, cardinality) for cardinality in cat_cardinalities
+        )
+
+    def forward(self, x: Tensor, t: Tensor, c: Tensor | None = None) -> dict[str, Any]:
+        """Predict noise and per-column categorical logits."""
+
+        noise, hidden = self.base.forward_with_hidden(x, t, c)
+        return {
+            "noise": noise,
+            "cat_logits": [head(hidden) for head in self.cat_heads],
+        }
+
+
+def build_denoiser(
+    d_in: int,
+    num_dim: int,
+    cat_dims: list[tuple[int, int]],
+    config: dict[str, Any],
+    context_dim: int | None = None,
+) -> nn.Module:
+    """Build a denoiser from a serialized model configuration.
+
+    Mirrors ``TrainingConfig.model_dump()`` so trainer and bundle rebuild
+    identical architectures. MLP is the default; the base denoiser is wrapped
+    with logit heads when ``lambda_cat > 0`` and categorical columns exist.
+    """
+
+    hidden_dims = tuple(int(dim) for dim in config.get("hidden_dims", (512, 1024, 1024, 512)))
+    denoiser_type = config.get("denoiser_type", "mlp")
+    lambda_cat = float(config.get("lambda_cat", 0.0))
+    if denoiser_type == "transformer":
+        from datalus.models.transformer import TabularTransformerDenoiser
+
+        d_model = int(config.get("transformer_d_model", 256))
+        num_cls = int(config.get("transformer_num_cls", 2))
+        base = TabularTransformerDenoiser(
+            d_in=d_in,
+            num_dim=num_dim,
+            cat_dims=cat_dims,
+            context_dim=context_dim,
+            d_model=d_model,
+            num_blocks=int(config.get("transformer_blocks", 4)),
+            nhead=int(config.get("transformer_heads", 8)),
+            dim_ff=d_model * int(config.get("transformer_ff_factor", 2)),
+            num_inds=config.get("transformer_num_inds", 16),
+            num_cls=num_cls,
+            rope_base=config.get("transformer_rope_base"),
+            ffn_chunk_size=config.get("transformer_ffn_chunk_size"),
+            row_chunk_size=config.get("transformer_row_chunk_size"),
+        )
+        hidden_dim = (num_cls + 1) * d_model
+    elif denoiser_type == "mlp":
+        base = TabularDenoiserMLP(d_in=d_in, hidden_dims=hidden_dims, context_dim=context_dim)
+        hidden_dim = hidden_dims[-1]
+    else:
+        raise ValueError(f"Unsupported denoiser type: {denoiser_type}")
+    cat_cardinalities = [cardinality for cardinality, _ in cat_dims]
+    if lambda_cat > 0 and cat_cardinalities:
+        return CategoricalHeadedDenoiser(base, cat_cardinalities, hidden_dim)
+    return base
 
 
 class EMA:
