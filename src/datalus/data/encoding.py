@@ -1,11 +1,17 @@
-"""Reversible heterogeneous tabular encoding for DATALUS."""
+# Adapted from TabFM (https://github.com/google-research/tabfm),
+# Copyright 2026 Google LLC, Apache License 2.0.
+"""Reversible heterogeneous tabular encoding for DATALUS.
+
+Mirrors TabFM preprocessing (quantile noise, outlier clipping, ordinal modes)
+while keeping the transforms reversible for diffusion generation.
+"""
 
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import polars as pl
@@ -19,6 +25,24 @@ class EncodedBatch:
     x_cat: np.ndarray | None
 
 
+def _clip_outliers(values: np.ndarray, threshold: float) -> np.ndarray:
+    """Clip extreme values with two-stage robust z-score bounds."""
+
+    arr = values.astype(np.float64)
+    mean = float(np.nanmean(arr))
+    std = float(np.nanstd(arr, ddof=1 if arr.size > 1 else 0))
+    std = max(std, 1e-6)
+    lower = mean - threshold * std
+    upper = mean + threshold * std
+    cleaned = np.where((arr < lower) | (arr > upper), np.nan, arr)
+    robust_mean = float(np.nanmean(cleaned))
+    robust_std = float(np.nanstd(cleaned, ddof=1 if cleaned.size > 1 else 0))
+    if not np.isfinite(robust_mean):
+        return np.clip(arr, lower, upper)
+    robust_std = max(robust_std, 1e-6)
+    return np.clip(arr, robust_mean - threshold * robust_std, robust_mean + threshold * robust_std)
+
+
 @dataclass(slots=True)
 class NumericQuantileTransform:
     """One-dimensional quantile normalization with an inverse map."""
@@ -27,38 +51,71 @@ class NumericQuantileTransform:
     quantiles: list[float]
     references: list[float]
     fill_value: float
+    mean: float | None = None
+    scale: float | None = None
 
     @classmethod
-    def fit(cls, column: str, values: np.ndarray, n_quantiles: int = 1_000) -> NumericQuantileTransform:
-        """Fit monotone quantiles and a fill value for one numeric column."""
+    def fit(
+        cls,
+        column: str,
+        values: np.ndarray,
+        n_quantiles: int = 1_000,
+        noise: float = 0.0,
+        random_state: int = 42,
+        outlier_threshold: float | None = None,
+        standardize: bool = False,
+    ) -> NumericQuantileTransform:
+        """Fit monotone quantiles, optionally with RTDL noise, outlier clipping, and standardization."""
 
         clean = values.astype(np.float64)
         clean = clean[np.isfinite(clean)]
         if clean.size == 0:
             clean = np.array([0.0], dtype=np.float64)
+        if noise > 0:
+            std = float(np.std(clean))
+            noise_std = noise / max(std, noise)
+            rng = np.random.default_rng(random_state)
+            clean = clean + noise_std * rng.standard_normal(clean.shape)
+        if outlier_threshold is not None:
+            clean = _clip_outliers(clean, outlier_threshold)
         quantile_count = int(min(max(clean.size, 2), n_quantiles))
         references = np.linspace(0.0, 1.0, quantile_count)
         quantiles = np.quantile(clean, references)
         quantiles = np.maximum.accumulate(quantiles)
+        mean = None
+        scale = None
+        if standardize:
+            encoded = np.interp(clean, quantiles, references) * 2.0 - 1.0
+            mean = float(np.mean(encoded))
+            scale = float(np.std(encoded) + 1e-6)
         return cls(
             column=column,
             quantiles=quantiles.astype(float).tolist(),
             references=references.astype(float).tolist(),
             fill_value=float(np.median(clean)),
+            mean=mean,
+            scale=scale,
         )
 
     def transform(self, values: np.ndarray) -> np.ndarray:
-        """Map raw values to the [-1, 1] normalized interval."""
+        """Map raw values to the normalized interval."""
 
         arr = values.astype(np.float64)
         arr = np.where(np.isfinite(arr), arr, self.fill_value)
         encoded = np.interp(arr, self.quantiles, self.references, left=0.0, right=1.0)
-        return (encoded * 2.0 - 1.0).astype(np.float32)
+        encoded = encoded * 2.0 - 1.0
+        if self.scale is not None:
+            encoded = (encoded - self.mean) / self.scale
+            encoded = np.clip(encoded, -100.0, 100.0)
+        return encoded.astype(np.float32)
 
     def inverse(self, values: np.ndarray) -> np.ndarray:
         """Map normalized values back to the original numeric scale."""
 
-        clipped = np.clip((values.astype(np.float64) + 1.0) / 2.0, 0.0, 1.0)
+        arr = values.astype(np.float64)
+        if self.scale is not None:
+            arr = arr * self.scale + self.mean
+        clipped = np.clip((arr + 1.0) / 2.0, 0.0, 1.0)
         return np.interp(clipped, self.references, self.quantiles).astype(np.float32)
 
     def to_dict(self) -> dict[str, Any]:
@@ -69,6 +126,8 @@ class NumericQuantileTransform:
             "quantiles": self.quantiles,
             "references": self.references,
             "fill_value": self.fill_value,
+            "mean": self.mean,
+            "scale": self.scale,
         }
 
     @classmethod
@@ -89,14 +148,32 @@ class CategoricalVocabulary:
     unknown_token: str = "__UNKNOWN__"
 
     @classmethod
-    def fit(cls, column: str, values: np.ndarray) -> CategoricalVocabulary:
-        """Collect sorted categories and their observed frequencies."""
+    def fit(
+        cls,
+        column: str,
+        values: np.ndarray,
+        mode: Literal["alphabetical", "appearance", "frequency"] = "alphabetical",
+        min_frequency: int = 1,
+    ) -> CategoricalVocabulary:
+        """Collect categories by ``mode``, excluding those below ``min_frequency``."""
 
         normalized = [_normalize_category(value) for value in values]
-        categories = sorted({value for value in normalized if value not in {"__NULL__", "__UNKNOWN__"}})
         frequencies: dict[str, int] = {}
         for value in normalized:
             frequencies[value] = frequencies.get(value, 0) + 1
+        sentinels = {"__NULL__", "__UNKNOWN__"}
+        base = {value for value in set(normalized) if value not in sentinels}
+        if mode == "frequency":
+            categories = sorted(base, key=lambda value: (-frequencies[value], value))
+        elif mode == "appearance":
+            ordered = list(dict.fromkeys(normalized))
+            categories = [value for value in ordered if value in base]
+        elif mode == "alphabetical":
+            categories = sorted(base)
+        else:
+            raise ValueError(f"Unsupported categorical mode: {mode}")
+        if min_frequency > 1:
+            categories = [value for value in categories if frequencies[value] >= min_frequency]
         return cls(column=column, categories=categories, frequencies=frequencies)
 
     @property
@@ -173,12 +250,36 @@ class TabularEncoder:
         schema_metadata: dict[str, dict[str, Any]],
         numeric_transforms: dict[str, NumericQuantileTransform] | None = None,
         categorical_vocabs: dict[str, CategoricalVocabulary] | None = None,
+        quantile_noise: float = 0.0,
+        rtdl_quantile_dynamic: bool = False,
+        outlier_threshold: float | None = None,
+        numeric_standardize: bool = False,
+        cat_encoder_mode: Literal["alphabetical", "appearance", "frequency"] = "alphabetical",
+        min_cat_frequency: int = 1,
+        random_state: int = 42,
     ) -> None:
-        """Initialize the encoder with schema metadata and optional fitted transforms."""
+        """Initialize the encoder with schema metadata and an optional encoding policy."""
 
         self.schema_metadata = schema_metadata
         self.numeric_transforms = numeric_transforms or {}
         self.categorical_vocabs = categorical_vocabs or {}
+        self.quantile_noise = quantile_noise
+        self.rtdl_quantile_dynamic = rtdl_quantile_dynamic
+        self.outlier_threshold = outlier_threshold
+        self.numeric_standardize = numeric_standardize
+        self.cat_encoder_mode = cat_encoder_mode
+        self.min_cat_frequency = min_cat_frequency
+        self.random_state = random_state
+
+    @property
+    def augmented_columns(self) -> list[str]:
+        """Return training-time augmented column names flagged in the schema."""
+
+        return [
+            column
+            for column, meta in self.schema_metadata.items()
+            if meta.get("augmented", False)
+        ]
 
     @property
     def active_schema(self) -> dict[str, dict[str, Any]]:
@@ -217,10 +318,27 @@ class TabularEncoder:
 
         for column in self.numerical_columns:
             values = frame.get_column(column).cast(pl.Float64, strict=False).to_numpy()
-            self.numeric_transforms[column] = NumericQuantileTransform.fit(column, values)
+            clean_size = int(np.sum(np.isfinite(values.astype(np.float64, copy=False))))
+            n_quantiles = 1_000
+            if self.rtdl_quantile_dynamic:
+                n_quantiles = int(min(max(clean_size // 30, 10), 1_000))
+            self.numeric_transforms[column] = NumericQuantileTransform.fit(
+                column,
+                values,
+                n_quantiles=n_quantiles,
+                noise=self.quantile_noise,
+                random_state=self.random_state,
+                outlier_threshold=self.outlier_threshold,
+                standardize=self.numeric_standardize,
+            )
         for column in self.categorical_columns:
             values = frame.get_column(column).to_numpy()
-            self.categorical_vocabs[column] = CategoricalVocabulary.fit(column, values)
+            self.categorical_vocabs[column] = CategoricalVocabulary.fit(
+                column,
+                values,
+                mode=self.cat_encoder_mode,
+                min_frequency=self.min_cat_frequency,
+            )
             self.schema_metadata[column]["cardinality"] = self.categorical_vocabs[column].size
             self.schema_metadata[column]["category_frequencies"] = (
                 self.categorical_vocabs[column].frequencies or {}
@@ -280,6 +398,13 @@ class TabularEncoder:
             "categorical_vocabs": {
                 column: vocab.to_dict() for column, vocab in self.categorical_vocabs.items()
             },
+            "quantile_noise": self.quantile_noise,
+            "rtdl_quantile_dynamic": self.rtdl_quantile_dynamic,
+            "outlier_threshold": self.outlier_threshold,
+            "numeric_standardize": self.numeric_standardize,
+            "cat_encoder_mode": self.cat_encoder_mode,
+            "min_cat_frequency": self.min_cat_frequency,
+            "random_state": self.random_state,
         }
 
     def save(self, path: str | Path) -> None:
@@ -303,6 +428,13 @@ class TabularEncoder:
                 column: CategoricalVocabulary.from_dict(item)
                 for column, item in payload.get("categorical_vocabs", {}).items()
             },
+            quantile_noise=float(payload.get("quantile_noise", 0.0)),
+            rtdl_quantile_dynamic=bool(payload.get("rtdl_quantile_dynamic", False)),
+            outlier_threshold=payload.get("outlier_threshold"),
+            numeric_standardize=bool(payload.get("numeric_standardize", False)),
+            cat_encoder_mode=payload.get("cat_encoder_mode", "alphabetical"),
+            min_cat_frequency=int(payload.get("min_cat_frequency", 1)),
+            random_state=int(payload.get("random_state", 42)),
         )
 
     @classmethod
