@@ -12,7 +12,10 @@ from datalus.export import (
     quantize_int8,
     validate_int8_cfg_parity,
 )
-from datalus.models.nn import TabularDenoiserMLP
+from datalus.generation.bundle import base_denoiser_for_export
+from datalus.models.diffusion import TabularDiffusion
+from datalus.models.nn import CategoricalHeadedDenoiser, TabularDenoiserMLP
+from datalus.models.transformer import TabularTransformerDenoiser
 
 
 def test_artifact_api_serves_manifest(tmp_path):
@@ -48,3 +51,39 @@ def test_int8_cfg_parity_guard_runs_on_small_onnx_export(tmp_path):
     parity = validate_int8_cfg_parity(fp32, int8, latent_dim=3, cfg_scale=3.0)
     assert parity["cfg_scale"] == 3.0
     assert "amplified_max_abs_diff" in parity
+
+
+def test_transformer_denoiser_exports_to_onnx_with_parity(tmp_path):
+    """The attention denoiser exports with the same (x_t, timestep) contract."""
+
+    pytest.importorskip("onnxruntime")
+    torch.manual_seed(0)
+    denoiser = TabularTransformerDenoiser(
+        d_in=4,
+        num_dim=2,
+        cat_dims=[(5, 2)],
+        dim_t=8,
+        d_model=8,
+        num_blocks=1,
+        nhead=4,
+        num_inds=4,
+    ).eval()
+    fp32 = export_denoiser_onnx(denoiser, tmp_path / "model_transformer.onnx", latent_dim=4)
+    from datalus.export import validate_onnx_parity
+
+    parity = validate_onnx_parity(denoiser, fp32, latent_dim=4)
+    assert parity["passed"]
+
+
+def test_onnx_export_unwraps_categorical_heads():
+    """Export unwraps CategoricalHeadedDenoiser to the noise-only base."""
+
+    torch.manual_seed(0)
+    base = TabularDenoiserMLP(d_in=3, hidden_dims=(8, 8), dim_t=8)
+    headed = CategoricalHeadedDenoiser(base, [5], 8)
+    diffusion = TabularDiffusion(headed, num_timesteps=20)
+    unwrapped = base_denoiser_for_export(diffusion)
+    assert unwrapped is base
+    x = torch.randn(2, 3)
+    t = torch.tensor([1, 2])
+    assert unwrapped(x, t).shape == (2, 3)

@@ -1,29 +1,50 @@
 """Model-bundle reconstruction and latent decoding helpers.
 
 Reconstructs a trained diffusion model, projector, and encoder from DATALUS
-artifacts and converts latent tensors back into Polars DataFrames.
+artifacts and converts latent tensors back into Polars DataFrames. The bundle
+reads the serialized model configuration from the checkpoint so the denoiser
+architecture (MLP or transformer, with optional categorical heads) is rebuilt
+identically to training.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import polars as pl
 import torch
 
 from datalus.data.encoding import TabularEncoder
 from datalus.models.diffusion import TabularDiffusion
-from datalus.models.nn import EMA, FeatureProjector, TabularDenoiserMLP
+from datalus.models.nn import EMA, CategoricalHeadedDenoiser, FeatureProjector, build_denoiser
+from datalus.training.checkpointing import load_checkpoint
+
+
+def _context_dim_from_config(model_config: dict, encoder: TabularEncoder) -> tuple[int | None, bool]:
+    """Resolve the CFG context dimension and target topology from a checkpoint."""
+
+    target = model_config.get("target_column")
+    if target is None:
+        return None, False
+    if target in encoder.categorical_columns:
+        return encoder.categorical_vocabs[target].size, True
+    if target in encoder.numerical_columns:
+        return 1, False
+    return None, False
 
 
 def load_model_bundle(
     checkpoint_path: str | Path,
     encoder_path: str | Path,
     use_ema: bool = False,
-) -> tuple[TabularDiffusion, FeatureProjector, TabularEncoder, torch.device]:
-    """Reconstruct model, projector, and encoder from DATALUS artifacts."""
+) -> tuple[TabularDiffusion, FeatureProjector, TabularEncoder, torch.device, dict]:
+    """Reconstruct model, projector, and encoder from DATALUS artifacts.
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    Returns the serialized model config so callers can rebuild CFG contexts.
+    """
+
+    checkpoint = load_checkpoint(checkpoint_path, map_location="cpu")
     encoder = TabularEncoder.load(encoder_path)
     projector = FeatureProjector(
         encoder.schema_metadata,
@@ -31,20 +52,77 @@ def load_model_bundle(
         encoder.categorical_columns,
     )
     projector.load_state_dict(checkpoint["projector_state"])
-    hidden_dims = tuple(checkpoint.get("config", {}).get("hidden_dims", (512, 1024, 1024, 512)))
-    num_timesteps = int(checkpoint.get("config", {}).get("num_timesteps", 1000))
-    denoiser = TabularDenoiserMLP(
-        d_in=projector.total_latent_dim,
-        hidden_dims=hidden_dims,
+    model_config = checkpoint.get("config", {})
+    num_timesteps = int(model_config.get("num_timesteps", 1000))
+    context_dim, _ = _context_dim_from_config(model_config, encoder)
+    denoiser = build_denoiser(
+        projector.total_latent_dim,
+        projector.num_dim,
+        projector.cat_dims,
+        model_config,
+        context_dim=context_dim,
     )
-    diffusion = TabularDiffusion(denoiser, num_timesteps=num_timesteps)
+    diffusion = TabularDiffusion(
+        denoiser,
+        num_timesteps=num_timesteps,
+        num_dim=projector.num_dim,
+        cat_dims=projector.cat_dims,
+        lambda_num=float(model_config.get("lambda_num", 1.0)),
+        lambda_cat=float(model_config.get("lambda_cat", 0.0)),
+    )
     diffusion.load_state_dict(checkpoint["diffusion_state"])
     if use_ema and "ema_state" in checkpoint:
         ema = EMA(diffusion)
         ema.load_state_dict(checkpoint["ema_state"])
         ema.copy_to(diffusion)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return diffusion.to(device).eval(), projector.to(device).eval(), encoder, device
+    return diffusion.to(device).eval(), projector.to(device).eval(), encoder, device, model_config
+
+
+def base_denoiser_for_export(diffusion: TabularDiffusion) -> torch.nn.Module:
+    """Return the noise-only denoiser for ONNX export, unwrapping logit heads."""
+
+    denoiser = diffusion.denoiser
+    if isinstance(denoiser, CategoricalHeadedDenoiser):
+        return denoiser.base
+    return denoiser
+
+
+def build_context_vector(
+    encoder: TabularEncoder,
+    model_config: dict,
+    conditions: dict | None,
+    n_records: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    """Build the CFG context tensor for the checkpoint's target column."""
+
+    if not conditions:
+        return None
+    target, target_is_categorical = _context_dim_from_config(model_config, encoder)
+    if target is None:
+        return None
+    if target not in conditions:
+        return None
+    vector = np.zeros((n_records, target), dtype=np.float32)
+    if target_is_categorical:
+        vocab = encoder.categorical_vocabs[target]
+        category_idx = vocab.transform(np.array([conditions[target]]))[0]
+        vector[:, int(category_idx)] = 1.0
+    else:
+        transform = encoder.numeric_transforms[target]
+        value = transform.transform(np.array([float(conditions[target])]))[0]
+        vector[:, 0] = value
+    return torch.from_numpy(vector).to(device)
+
+
+def drop_augmented_columns(frame: pl.DataFrame, encoder: TabularEncoder) -> pl.DataFrame:
+    """Drop training-time augmented columns from decoded output frames."""
+
+    augmented = [column for column in encoder.augmented_columns if column in frame.columns]
+    if not augmented:
+        return frame
+    return frame.drop(augmented)
 
 
 @torch.no_grad()

@@ -38,6 +38,7 @@ type ProjectorConfig = {
   latent_dim?: number;
   cat_dims?: Array<{ cardinality: number; embedding_dim: number }>;
   embeddings?: number[][][];
+  augmented_columns?: string[];
 };
 
 function seededRandom(seed: number): () => number {
@@ -174,6 +175,7 @@ function decodeLatents(
 ): Record<string, unknown>[] {
   const numericColumns = args.projector?.numerical_columns ?? [];
   const categoricalColumns = args.projector?.categorical_columns ?? [];
+  const augmented = new Set(args.projector?.augmented_columns ?? []);
   const records: Record<string, unknown>[] = [];
   for (let row = 0; row < args.nRecords; row += 1) {
     const record: Record<string, unknown> = {};
@@ -182,6 +184,7 @@ function decodeLatents(
       const transform = args.encoder?.numeric_transforms?.[column];
       const encoded = latents[row * latentDim + cursor];
       cursor += 1;
+      if (augmented.has(column)) return;
       const unit = Math.min(1, Math.max(0, (encoded + 1) / 2));
       record[column] = transform
         ? interpolate(unit, transform.references, transform.quantiles)
@@ -192,6 +195,7 @@ function decodeLatents(
       const start = row * latentDim + cursor;
       const chunk = latents.slice(start, start + dim);
       cursor += dim;
+      if (augmented.has(column)) return;
       record[column] = nearestCategory(
         chunk,
         args.projector?.embeddings?.[idx] ?? [],
