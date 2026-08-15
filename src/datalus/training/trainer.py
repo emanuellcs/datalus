@@ -11,10 +11,12 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import polars as pl
 import torch
 from rich.progress import Progress
@@ -23,10 +25,11 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from datalus._console import console as _shared_console
 from datalus.config import TrainingConfig
+from datalus.data.augmentation import FeatureAugmentation
 from datalus.data.encoding import TabularEncoder
 from datalus.data.loader import ChunkedParquetBatches
 from datalus.models.diffusion import TabularDiffusion
-from datalus.models.nn import EMA, FeatureProjector, TabularDenoiserMLP
+from datalus.models.nn import EMA, FeatureProjector, build_denoiser
 from datalus.training.checkpointing import (
     capture_rng_state,
     load_checkpoint,
@@ -35,6 +38,7 @@ from datalus.training.checkpointing import (
     save_checkpoint,
     seed_everything,
     update_best_checkpoint,
+    validate_checkpoint_for_resume,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,22 +61,38 @@ class DatalusTrainer:
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         seed_everything(config.seed)
         self.schema_metadata = json.loads(Path(config.schema_path).read_text(encoding="utf-8"))
-        self.batches = ChunkedParquetBatches(config.data_path, config.batch_size, config.seed)
+        if config.target_column and config.target_column in self.schema_metadata:
+            self.schema_metadata[config.target_column]["is_target"] = True
+        self._augmentation = FeatureAugmentation(
+            mode=config.feature_augmentation,
+            random_state=config.seed,
+        )
+        self._base_encoder: TabularEncoder | None = None
         self.encoder = self._fit_encoder()
         self.encoder.save(self.output_dir / "encoder_config.json")
+        data_path = self._materialize_augmented()
+        self.batches = ChunkedParquetBatches(data_path, config.batch_size, config.seed)
+        self.context_dim, self.target_is_categorical = self._resolve_context_dim()
         self.projector = FeatureProjector(
             self.encoder.schema_metadata,
             self.encoder.numerical_columns,
             self.encoder.categorical_columns,
         ).to(self.device)
-        self.denoiser = TabularDenoiserMLP(
-            d_in=self.projector.total_latent_dim,
-            hidden_dims=config.hidden_dims,
+        self.denoiser = build_denoiser(
+            self.projector.total_latent_dim,
+            self.projector.num_dim,
+            self.projector.cat_dims,
+            config.model_dump(mode="json"),
+            context_dim=self.context_dim,
         ).to(self.device)
         self.diffusion = TabularDiffusion(
             self.denoiser,
             num_timesteps=config.num_timesteps,
             condition_dropout=config.condition_dropout,
+            num_dim=self.projector.num_dim,
+            cat_dims=self.projector.cat_dims,
+            lambda_num=config.lambda_num,
+            lambda_cat=config.lambda_cat,
         ).to(self.device)
 
         if torch.cuda.is_available() and torch.cuda.device_count() > 1:
@@ -101,18 +121,103 @@ class DatalusTrainer:
         self.start_batch_index = 0
         self.global_step = 0
         self.loss_history: list[float] = []
+        self._last_checkpoint_bytes = 0
+
+    def _encoder_policy(self) -> dict[str, Any]:
+        """Return the TabFM-style encoding policy derived from the config."""
+
+        return {
+            "quantile_noise": self.config.quantile_noise,
+            "rtdl_quantile_dynamic": self.config.rtdl_quantile_dynamic,
+            "outlier_threshold": self.config.outlier_threshold,
+            "numeric_standardize": self.config.numeric_standardize,
+            "cat_encoder_mode": self.config.cat_encoder_mode,
+            "min_cat_frequency": self.config.min_cat_frequency,
+            "random_state": self.config.seed,
+        }
 
     def _fit_encoder(self) -> TabularEncoder:
         """Fit a reversible encoder on a bounded sample of the training data."""
 
         sample = pl.scan_parquet(self.config.data_path).head(self.config.max_encoder_fit_rows).collect()
-        encoder = TabularEncoder(self.schema_metadata)
-        return encoder.fit(sample)
+        policy = self._encoder_policy()
+        if self.config.feature_augmentation == "none":
+            self._base_encoder = None
+            return TabularEncoder(self.schema_metadata, **policy).fit(sample)
+        base_encoder = TabularEncoder(dict(self.schema_metadata), **policy).fit(sample)
+        self._base_encoder = base_encoder
+        self._augmentation.fit(base_encoder, sample)
+        self.schema_metadata.update(
+            FeatureAugmentation.schema_metadata_for(
+                self.config.feature_augmentation,
+                self._augmentation.column_names,
+            )
+        )
+        augmented_sample = self._augmentation.transform_frame(sample, base_encoder)
+        return TabularEncoder(self.schema_metadata, **policy).fit(augmented_sample)
+
+    def _materialize_augmented(self) -> Path:
+        """Write the training-time augmented Parquet dataset when enabled."""
+
+        if self.config.feature_augmentation == "none" or self._base_encoder is None:
+            return Path(self.config.data_path)
+        output = self.output_dir / "augmented.parquet"
+        lazy = pl.scan_parquet(self.config.data_path)
+        num_rows = int(lazy.select(pl.len()).collect().item())
+        chunk_size = self.config.batch_size
+        chunks: list[pl.LazyFrame] = []
+        for offset in range(0, num_rows, chunk_size):
+            frame = lazy.slice(offset, chunk_size).collect()
+            chunks.append(self._augmentation.transform_frame(frame, self._base_encoder).lazy())
+        pl.concat(chunks).sink_parquet(output, compression="snappy")
+        logger.info(
+            f"Materialized augmented training data with {len(self._augmentation.column_names)} "
+            f"columns to {output}."
+        )
+        return output
+
+    def _resolve_context_dim(self) -> tuple[int | None, bool]:
+        """Resolve the CFG context dimension from the optional target column."""
+
+        target = self.config.target_column
+        if target is None:
+            return None, False
+        if target in self.encoder.categorical_columns:
+            return self.encoder.categorical_vocabs[target].size, True
+        if target in self.encoder.numerical_columns:
+            return 1, False
+        logger.warning(
+            f"Target column '{target}' is not retained by the encoder; conditioning disabled."
+        )
+        return None, False
+
+    def _build_context(self, encoded: Any) -> torch.Tensor | None:
+        """Build the per-batch CFG context vector from the target column."""
+
+        if self.context_dim is None:
+            return None
+        n_rows = len(encoded.x_cat) if encoded.x_cat is not None else len(encoded.x_num)
+        if self.target_is_categorical:
+            column_idx = self.encoder.categorical_columns.index(self.config.target_column)
+            one_hot = np.zeros((n_rows, self.context_dim), dtype=np.float32)
+            targets = encoded.x_cat[:, column_idx].astype(np.int64)
+            one_hot[np.arange(n_rows), targets] = 1.0
+            return torch.from_numpy(one_hot).to(self.device)
+        column_idx = self.encoder.numerical_columns.index(self.config.target_column)
+        return torch.from_numpy(encoded.x_num[:, column_idx]).to(self.device).unsqueeze(-1)
 
     def resume(self, checkpoint_path: str | Path) -> None:
         """Restore model, optimizer, scheduler, and RNG state from a checkpoint."""
 
         checkpoint = load_checkpoint(checkpoint_path, map_location=self.device)
+        serialized = self.config.model_dump(mode="json")
+        serialized["config_hash"] = _config_hash(serialized)
+        validate_checkpoint_for_resume(checkpoint, serialized)
+        if int(checkpoint["global_step"]) < self.global_step:
+            raise ValueError(
+                f"Checkpoint global_step ({checkpoint['global_step']}) is behind "
+                f"the current step ({self.global_step})."
+            )
         getattr(self.diffusion, "module", self.diffusion).load_state_dict(checkpoint["diffusion_state"])
         getattr(self.projector, "module", self.projector).load_state_dict(checkpoint["projector_state"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state"])
@@ -151,7 +256,9 @@ class DatalusTrainer:
                     visible=show_progress,
                 )
 
+                epoch_ran = False
                 for batch_index, offset in enumerate(offsets[batch_start:], start=batch_start):
+                    epoch_ran = True
                     loss_value = self._train_batch(self.batches.read_offset(offset))
                     self.loss_history.append(loss_value)
                     self.global_step += 1
@@ -161,27 +268,26 @@ class DatalusTrainer:
                         f"lr={self.optimizer.param_groups[0]['lr']:.2e}"
                     )
 
-                    # Save on the epoch cadence, the step cadence, or both.
-                    epoch_cadence = self.config.save_every > 0 and epoch % self.config.save_every == 0
+                    # Step-cadence saves run inside the loop; the epoch
+                    # cadence fires once at each epoch boundary below.
                     step_cadence = (
                         self.config.checkpoint_every_steps > 0
                         and self.global_step % self.config.checkpoint_every_steps == 0
                     )
-                    if epoch_cadence or step_cadence:
+                    if step_cadence:
                         self.save_checkpoint(epoch, batch_index + 1, loss_value)
                         logger.info(f"Checkpoint saved at step {self.global_step}, loss={loss_value:.6f}")
 
                     if max_steps is not None and self.global_step >= max_steps:
                         logger.info(f"Reached max_steps={max_steps}. Stopping training.")
-                        return self.save_checkpoint(
-                            epoch,
-                            batch_index + 1,
-                            loss_value,
-                            name="checkpoint_latest.pt",
-                        )
+                        return self.save_checkpoint(epoch, batch_index + 1, loss_value)
 
                     if show_progress:
                         progress.update(batch_task, advance=1)
+
+                if epoch_ran and (epoch + 1) % self.config.save_every == 0:
+                    self.save_checkpoint(epoch, batch_index + 1, loss_value)
+                    logger.info(f"Epoch checkpoint saved at step {self.global_step}, loss={loss_value:.6f}")
 
                 if show_progress:
                     progress.update(batch_task, visible=False)
@@ -202,7 +308,6 @@ class DatalusTrainer:
             self.config.epochs,
             0,
             self.loss_history[-1],
-            name="checkpoint_latest.pt",
         )
 
     def _train_batch(self, frame: pl.DataFrame) -> float:
@@ -219,10 +324,11 @@ class DatalusTrainer:
             if encoded.x_cat is not None
             else None
         )
+        context = self._build_context(encoded)
         self.optimizer.zero_grad(set_to_none=True)
         with torch.amp.autocast(self.device.type, enabled=self.config.amp and self.device.type == "cuda"):
             latent = self.projector(x_num, x_cat)
-            loss = self.diffusion(latent)["loss"].mean()
+            loss = self.diffusion(latent, x_cat, context)["loss"].mean()
         self.scaler.scale(loss).backward()
         self.scaler.unscale_(self.optimizer)
         torch.nn.utils.clip_grad_norm_(
@@ -244,6 +350,7 @@ class DatalusTrainer:
     ) -> Path:
         """Write a checkpoint and maintain latest, best, and retention files."""
 
+        self._assert_free_space()
         checkpoint_name = name or f"checkpoint_step_{self.global_step:08d}.pt"
         path = self.checkpoint_dir / checkpoint_name
         payload = {
@@ -263,18 +370,59 @@ class DatalusTrainer:
             "rng_state": capture_rng_state(),
         }
         save_checkpoint(path, payload)
+        self._last_checkpoint_bytes = path.stat().st_size
 
         latest = self.checkpoint_dir / "checkpoint_latest.pt"
-        if latest != path:
+        if latest != path and not self._publish_latest(path, latest):
             save_checkpoint(latest, payload)
 
         if self.config.save_strategy == "best":
             update_best_checkpoint(self.checkpoint_dir, loss, path)
 
-        if self.config.keep_last is not None:
+        if self.config.keep_last > 0:
             prune_checkpoints(self.checkpoint_dir, self.config.keep_last)
 
         return path
+
+    @staticmethod
+    def _publish_latest(step_path: Path, latest: Path) -> bool:
+        """Atomically symlink checkpoint_latest.pt to the newest step file."""
+
+        temp = latest.with_name(latest.name + ".tmp")
+        try:
+            temp.unlink(missing_ok=True)
+            os.symlink(step_path.name, temp)
+            os.replace(temp, latest)
+            return True
+        except OSError:
+            try:
+                temp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def _assert_free_space(self) -> None:
+        """Warn or refuse checkpoint writes when the disk is low on space."""
+
+        threshold = self.config.min_free_space_gb
+        if threshold <= 0:
+            return
+        free_bytes = shutil.disk_usage(self.checkpoint_dir).free
+        min_free_bytes = threshold * 1024**3
+        critical_bytes = max(min_free_bytes * 0.25, self._last_checkpoint_bytes * 1.5)
+        free_gib = free_bytes / 1024**3
+        if free_bytes < critical_bytes:
+            raise RuntimeError(
+                f"Insufficient free disk space ({free_gib:.2f} GiB) to safely "
+                "write a checkpoint. Free space or use --keep-last N to rotate "
+                "checkpoints."
+            )
+        if free_bytes < min_free_bytes:
+            logger.warning(
+                f"Free disk space ({free_gib:.2f} GiB) is below "
+                f"--min-free-space ({threshold:.1f} GiB). Use --keep-last N to "
+                "rotate checkpoints and avoid running out of space."
+            )
 
 
 def _config_hash(config: dict[str, Any]) -> str:

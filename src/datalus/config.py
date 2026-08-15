@@ -34,6 +34,7 @@ class ColumnProfile(BaseConfig):
     is_target: bool = False
     retained: bool = True
     reason: str | None = None
+    augmented: bool = False
 
 
 class RePaintConfig(BaseConfig):
@@ -105,7 +106,11 @@ class TrainingConfig(BaseConfig):
     epochs: int = Field(default=1, ge=1)
     learning_rate: float = Field(default=2e-4, gt=0.0)
     weight_decay: float = Field(default=1e-4, ge=0.0)
-    checkpoint_every_steps: int = Field(default=500, ge=1)
+    checkpoint_every_steps: int = Field(
+        default=500,
+        ge=0,
+        description="Save a checkpoint every N training steps (0 disables step cadence)",
+    )
     seed: int = 42
     num_timesteps: int = Field(default=1_000, ge=1)
     hidden_dims: tuple[int, ...] = (512, 1024, 1024, 512)
@@ -116,13 +121,86 @@ class TrainingConfig(BaseConfig):
     max_grad_norm: float = Field(default=1.0, gt=0.0)
     max_encoder_fit_rows: int = Field(default=100_000, ge=1)
     gpu: str | None = Field(default=None, description="CUDA device indices, e.g., '0' or '0,1'")
-    keep_last: int | None = Field(
-        default=None,
-        ge=1,
-        description="Maximum number of recent checkpoints to keep (None = keep all)",
+    keep_last: int = Field(
+        default=3,
+        ge=0,
+        description="Maximum number of recent step checkpoints to keep (0 = keep all)",
     )
-    save_every: int = Field(default=1, ge=1, description="Save checkpoint every N epochs")
+    save_every: int = Field(
+        default=1,
+        ge=1,
+        description="Save a checkpoint every N epochs, at epoch boundaries",
+    )
+    min_free_space_gb: float = Field(
+        default=2.0,
+        ge=0.0,
+        description="Refuse checkpoint writes below this free-space threshold in GiB (0 disables)",
+    )
     save_strategy: Literal["all", "latest", "best"] = Field(
         default="latest",
         description="Checkpoint strategy: 'all' (keep all), 'latest' (rolling), 'best' (track lowest loss)",
+    )
+    # TabFM-style encoding policy.
+    quantile_noise: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="RTDL-style relative Gaussian noise added to numeric fit samples",
+    )
+    rtdl_quantile_dynamic: bool = Field(
+        default=False,
+        description="Dynamic quantile count min(n_samples // 30, n_quantiles) with floor 10",
+    )
+    outlier_threshold: float | None = Field(
+        default=None,
+        gt=0.0,
+        description="Two-stage robust z-score clipping threshold for numeric columns (None = disabled)",
+    )
+    numeric_standardize: bool = Field(
+        default=False,
+        description="Standardize quantile-encoded numeric values with clipping",
+    )
+    cat_encoder_mode: Literal["alphabetical", "appearance", "frequency"] = "alphabetical"
+    min_cat_frequency: int = Field(
+        default=1,
+        ge=1,
+        description="Collapse categories below this frequency to __UNKNOWN__ "
+        "(1 = preserve all observed categories)",
+    )
+    # Denoiser selection.
+    denoiser_type: Literal["mlp", "transformer"] = Field(
+        default="mlp",
+        description="Denoiser architecture: 'mlp' (residual MLP) or 'transformer' (attention)",
+    )
+    transformer_d_model: int = Field(default=256, ge=16)
+    transformer_blocks: int = Field(default=4, ge=1)
+    transformer_heads: int = Field(default=8, ge=1)
+    transformer_ff_factor: int = Field(default=2, ge=1)
+    transformer_num_inds: int | None = Field(
+        default=16,
+        ge=1,
+        description="Induced set-attention memory size (None = skip the induced stage)",
+    )
+    transformer_num_cls: int = Field(default=2, ge=1)
+    transformer_rope_base: float | None = Field(
+        default=None,
+        ge=0.0,
+        description="RoPE base frequency; None disables RoPE for permutation-invariant columns",
+    )
+    transformer_ffn_chunk_size: int | None = Field(default=8192, ge=1)
+    transformer_row_chunk_size: int | None = Field(default=4096, ge=1)
+    # Composite loss and conditioning.
+    target_column: str | None = Field(
+        default=None,
+        description="Optional target column for class-conditional (CFG) training",
+    )
+    lambda_num: float = Field(default=1.0, ge=0.0, description="Weight of the numerical MSE loss")
+    lambda_cat: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Weight of the categorical cross-entropy loss (0 = pure MSE)",
+    )
+    # Training-time feature augmentation.
+    feature_augmentation: Literal["none", "crosses", "svd"] = Field(
+        default="none",
+        description="Opt-in training-time feature augmentation: pairwise crosses or SVD structural features",
     )
