@@ -134,7 +134,7 @@ DATALUS exposes distinct workflows because synthetic data systems have different
 | Edge export | Export EMA weights to ONNX and optional INT8. | `datalus export-onnx` |
 | Artifact serving | Serve registry artifacts for browser-local inference. | `datalus serve` |
 
-The current denoiser exposes CFG-compatible inference logic. In the default training path, models are instantiated without a context vector, so `cfg_scale=1.0` is the unconditional path and changing `cfg_scale` has no effect unless a context-enabled denoiser is introduced. The ONNX export path still records an INT8 CFG amplification parity guard at `cfg_scale=3.0` because quantization drift can become operationally relevant when guidance is enabled.
+The denoiser exposes CFG-compatible inference logic. When training with `--target-column`, the trainer builds a per-batch context vector (one-hot for categorical targets, a scalar for numerical targets) and the denoiser is instantiated with a context projection, so `--cfg-scale` at sampling time becomes effective and `--conditions '{"target": "1"}'` enables class-conditional generation for `sample`, `augment`, and `balance`. Without `--target-column`, models are instantiated without a context vector, `cfg_scale=1.0` is the unconditional path, and changing `cfg_scale` has no effect. The ONNX export path still records an INT8 CFG amplification parity guard at `cfg_scale=3.0` because quantization drift can become operationally relevant when guidance is enabled.
 
 ## Interactive Notebooks
 
@@ -213,7 +213,7 @@ $$
 \mathcal{L}_{\mathrm{total}}=\lambda_{\mathrm{num}}\mathcal{L}_{\mathrm{MSE}}^{\mathrm{num}}+\lambda_{\mathrm{cat}}\mathcal{L}_{\mathrm{CE}}^{\mathrm{cat}}
 $$
 
-The current implementation projects categorical values into continuous learned embedding slices and trains the diffusion model with the MSE objective over the full latent vector. It does not currently train a separate categorical cross-entropy head.
+The default implementation projects categorical values into continuous learned embedding slices and trains the diffusion model with the MSE objective over the full latent vector. Passing `--lambda-cat > 0` to `datalus train` attaches a per-column categorical logit head (TabFM-style auxiliary head) and adds the cross-entropy term on top of the MSE, realizing the TabDDPM composite objective. The noise path and sampling are unchanged, so checkpoints trained with `lambda_cat > 0` sample identically through the existing DDIM/RePaint pipelines.
 
 ### DDIM Sampling
 
@@ -408,7 +408,9 @@ The Command Line Interface (CLI) is implemented with Typer in `src/datalus/cli.p
 ```bash
 datalus ingest raw.csv artifacts/demo/processed.parquet --schema-path artifacts/demo/schema_config.json --target-column target
 datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --epochs 5 --batch-size 2048 --gpu 0
+datalus train artifacts/demo/schema_config.json artifacts/demo/processed.parquet artifacts/demo --denoiser-type transformer --target-column target --lambda-cat 0.5 --feature-augmentation crosses --quantile-noise 1e-3
 datalus sample artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json artifacts/demo/synthetic.parquet --n-records 10000 --ddim-steps 50 --cfg-scale 1.0
+datalus sample artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json artifacts/demo/conditional.parquet --n-records 5000 --conditions '{"target": "1"}' --cfg-scale 3.0
 datalus augment artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json small.parquet artifacts/demo/augmented.parquet --n-records 5000
 datalus balance artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json train.parquet artifacts/demo/balanced.parquet target '{"0": 5000, "1": 5000}'
 datalus inpaint artifacts/demo/checkpoints/checkpoint_latest.pt artifacts/demo/encoder_config.json incomplete.parquet artifacts/demo/inpainted.parquet
@@ -439,10 +441,10 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | Command | Positional arguments | Options and defaults | Expected output |
 | --- | --- | --- | --- |
 | `ingest` | `input_path`, `output_path` | `--schema-path artifacts/schema_config.json`, `--target-column None` | Prints schema and processed Parquet paths. Writes Snappy Parquet and schema metadata. |
-| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None`, `--keep-last None`, `--save-every 1`, `--checkpoint-every-steps 500`, `--save-strategy latest` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
-| `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--checkpoint-source latest` | Writes synthetic Parquet with Snappy compression. |
-| `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--checkpoint-source latest` | Writes original rows plus synthetic rows selected to original columns. |
-| `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--max-attempts 10`, `--strict False`, `--checkpoint-source latest` | Writes Parquet approaching requested class counts. Raises if `--strict` and attempts are exhausted. |
+| `train` | `schema_path`, `data_path`, `output_dir` | `--epochs 1`, `--batch-size 2048`, `--max-steps None`, `--resume-from None`, `--gpu None`, `--keep-last 3`, `--save-every 1`, `--checkpoint-every-steps 500`, `--min-free-space 2.0`, `--save-strategy latest`, `--quantile-noise 0.0`, `--rtdl-quantile-dynamic False`, `--outlier-threshold None`, `--numeric-standardize False`, `--cat-encoder-mode alphabetical`, `--min-cat-frequency 1`, `--denoiser-type mlp`, `--target-column None`, `--lambda-cat 0.0`, `--feature-augmentation none` | Prints checkpoint path. Writes `encoder_config.json` and checkpoints under `output_dir/checkpoints`. |
+| `sample` | `checkpoint_path`, `encoder_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--conditions None`, `--checkpoint-source latest` | Writes synthetic Parquet with Snappy compression. |
+| `augment` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--n-records 100`, `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--conditions None`, `--checkpoint-source latest` | Writes original rows plus synthetic rows selected to original columns. |
+| `balance` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `target_column`, `target_distribution_json` | `--ddim-steps 50`, `--seed 42`, `--cfg-scale 1.0`, `--conditions None`, `--max-attempts 10`, `--strict False`, `--checkpoint-source latest` | Writes Parquet approaching requested class counts. Raises if `--strict` and attempts are exhausted. |
 | `inpaint` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path` | `--ddim-steps 50`, `--jump-length 10`, `--jump-n-sample 10`, `--seed 42`, `--checkpoint-source latest` | Writes Parquet with null-driven latent fields imputed. |
 | `counterfactual` | `checkpoint_path`, `encoder_path`, `input_path`, `output_path`, `intervention_json` | `--ddim-steps 50`, `--seed 42`, `--checkpoint-source latest` | Writes Parquet under fixed intervention columns. |
 | `audit` | `real_train_path`, `synthetic_path`, `schema_path`, `report_path` | `--target-column None`, `--real-holdout-path None`, `--mia-mode release` (`release` or `ci_lite`), `--max-audit-rows None` | Writes privacy JSON and utility JSON when target exists in both datasets. |
@@ -456,9 +458,13 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 - `ingest` uses delimiter sniffing for CSV, semicolon fallback for ambiguous Brazilian spreadsheet exports, `utf8-lossy` decoding, `infer_schema_length=10000`, `ignore_errors=True`, and `truncate_ragged_lines=True`.
 - `ingest` drops sparse columns with null ratio above `0.95`, identifier-like names such as CPF/CNPJ/CNS/email/phone-like fields, free-text columns, and unsupported dtypes.
 - The underlying `ZeroShotPreprocessor` defaults are `high_cardinality_threshold=50`, `sample_size=100000`, `rare_category_threshold=5`, and null tokens `""`, `NA`, `N/A`, `null`, `NULL`, and `None`. The target column is protected from the sparse and identifier drop rules.
-- `train` currently exposes a subset of `TrainingConfig` on the CLI. Learning rate, weight decay, hidden dimensions, AMP, EMA, warmup, and maximum encoder fit rows are configured in `TrainingConfig` for programmatic use.
-- `train` checkpoint cadence is dual: `--save-every N` writes a checkpoint every `N` epochs, while `--checkpoint-every-steps N` writes one every `N` training steps. Either cadence triggers a save.
+- `train` currently exposes a subset of `TrainingConfig` on the CLI. Learning rate, weight decay, hidden dimensions, AMP, EMA, warmup, maximum encoder fit rows, transformer dimensions, and `lambda_num` are configured in `TrainingConfig` for programmatic use.
+- `train` checkpoint cadence is dual: `--save-every N` writes a checkpoint once at every N-th epoch boundary, while `--checkpoint-every-steps N` writes one every `N` training steps. `--checkpoint-every-steps 0` disables the step cadence. `--keep-last N` rotates step checkpoints (default `3`; `--keep-last 0` keeps all), and `--min-free-space` (default `2.0` GiB) warns below the threshold and refuses to write when space is critically low.
+- `checkpoint_latest.pt` is an atomic symlink to the newest step checkpoint, so no checkpoint bytes are duplicated and the file is never half-written. `checkpoint_best.pt` is updated atomically, and interrupted atomic writes never leave debris (`*.pt.tmp` files are cleaned on the next save).
+- Checkpoints are loaded with torch's secure `weights_only` unpickler; RNG state is stored portably so no pickle globals need allowlisting. Checkpoints written before this format still load through a loud legacy fallback, and resume validates required keys plus architecture-defining settings before restoring state.
 - `sample`, `augment`, `balance`, `inpaint`, and `counterfactual` accept a `--checkpoint-source latest|best`. When `checkpoint_path` is a directory, the flag resolves `checkpoint_latest.pt` or `checkpoint_best.pt` inside it; a plain file path is used as-is.
+- `sample`, `augment`, and `balance` accept `--conditions '{"target": "1"}'` for class-conditional generation when the checkpoint was trained with `--target-column`. The condition must reference the checkpoint's configured target column; unknown categories map to `__UNKNOWN__`.
+- `--feature-augmentation crosses|svd` adds training-time structural features that live in the latent space and are dropped from decoded output by the Python and browser pipelines.
 - `balance` treats JSON class labels as strings during matching, so numeric class labels should be represented as JSON object keys such as `{"0": 5000}`.
 - `counterfactual` interventions must reference retained columns from the fitted encoder. Unknown categorical values map to `__UNKNOWN__`.
 - `audit` reads Parquet eagerly. For large official release audits, run on a machine sized for the projected one-hot matrix.
@@ -470,10 +476,10 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 
 1. `ingest` creates a retained Parquet dataset and `schema_config.json`.
 2. `DatalusTrainer` loads schema metadata and builds deterministic Parquet batch offsets.
-3. `TabularEncoder` fits numeric quantile transforms and categorical vocabularies on up to `max_encoder_fit_rows=100000`.
+3. `TabularEncoder` fits numeric quantile transforms and categorical vocabularies on up to `max_encoder_fit_rows=100000`, applying the TabFM-style encoding policy (RTDL quantile noise, robust outlier clipping, optional standardized outputs, categorical ordinal modes) when configured.
 4. `FeatureProjector` concatenates numeric latent slices and categorical embedding slices.
-5. `TabularDenoiserMLP` predicts diffusion noise over the full latent vector.
-6. `TabularDiffusion.compute_loss` samples random timesteps and optimizes the MSE epsilon objective.
+5. `TabularDenoiserMLP` (default) or `TabularTransformerDenoiser` (opt-in, TabFM-style attention) predicts diffusion noise over the full latent vector.
+6. `TabularDiffusion.compute_loss` samples random timesteps and optimizes the MSE epsilon objective, plus the categorical cross-entropy term when `lambda_cat > 0`.
 7. AdamW updates diffusion and projector parameters.
 8. Linear warmup is followed by cosine annealing to `eta_min=1e-6`.
 9. AMP GradScaler is used on CUDA when `amp=True`.
@@ -500,6 +506,30 @@ datalus serve artifacts --host 0.0.0.0 --port 8000
 | `max_grad_norm` | `1.0` |
 | `max_encoder_fit_rows` | `100000` |
 | `gpu` | `None` |
+| `keep_last` | `3` |
+| `min_free_space_gb` | `2.0` |
+| `quantile_noise` | `0.0` |
+| `rtdl_quantile_dynamic` | `False` |
+| `outlier_threshold` | `None` |
+| `numeric_standardize` | `False` |
+| `cat_encoder_mode` | `alphabetical` |
+| `min_cat_frequency` | `1` |
+| `denoiser_type` | `mlp` |
+| `target_column` | `None` |
+| `lambda_num` | `1.0` |
+| `lambda_cat` | `0.0` |
+| `feature_augmentation` | `none` |
+
+TabFM-inspired training techniques are opt-in: `quantile_noise` adds RTDL-style
+noise to numeric quantile fitting, `outlier_threshold` clips robust z-score
+outliers, `cat_encoder_mode`/`min_cat_frequency` control the categorical ordinal
+policy (rare-category preservation remains the default), `denoiser_type
+transformer` selects the attention denoiser, `target_column` enables CFG
+conditioning, `lambda_cat` enables the TabDDPM composite objective, and
+`feature_augmentation` adds feature crosses or SVD structural features that are
+kept in the latent space but dropped from decoded output. These techniques
+derive from [TabFM](https://github.com/google-research/tabfm)
+(Apache-2.0, Copyright 2026 Google LLC); see the `NOTICE` file.
 
 ### Multi-GPU Scaling
 
@@ -512,7 +542,7 @@ DATALUS supports explicit GPU allocation and automatic multi-GPU orchestration:
 
 ### Deterministic Checkpointing
 
-Checkpoints are written atomically where possible. Each checkpoint includes:
+Checkpoints are written atomically where possible. `--save-every` saves once at each N-th epoch boundary (never per batch), step checkpoints rotate to the `--keep-last` newest by default, `checkpoint_latest.pt` is an atomic symlink to the newest step checkpoint, and `--min-free-space` guards against ENOSPC. Each checkpoint includes:
 
 - Diffusion model state.
 - Feature projector state.
@@ -600,6 +630,29 @@ The implemented `TabularDenoiserMLP` topology is:
 5. Residual MLP blocks with Linear, LayerNorm, timestep injection, SiLU, Dropout, Linear, LayerNorm, and residual projection when dimensions differ.
 6. Final LayerNorm, SiLU, and Linear projection back to the latent dimension.
 7. Zero initialization of final Linear weights and bias.
+
+### TabFM-Inspired Transformer Denoiser (Opt-In)
+
+`datalus train --denoiser-type transformer` replaces the residual MLP with an
+attention-based epsilon predictor ported from TabFM's modern transformer
+components:
+
+1. The flat latent is tokenized per feature: each numerical coordinate and each
+   categorical embedding slice becomes one token.
+2. A time token plus learned CLS tokens are prepended.
+3. An optional induced set-attention stage (ISAB) provides a linear-complexity
+   memory bottleneck over the feature tokens.
+4. Stacked pre/post-norm attention blocks mix the tokens using RMSNorm, a
+   SwiGLU feed-forward network, per-dimension attention scaling (softplus), and
+   optional interleaved RoPE.
+5. A zero-initialized linear readout over the CLS tokens predicts the noise.
+
+The transformer keeps the exact `(x_t, timestep, context) -> predicted_noise`
+contract, so ONNX export, INT8 quantization, and browser inference work
+unchanged. RoPE is disabled by default because feature order is semantically
+arbitrary for tables; enable it with the config `transformer_rope_base`.
+Activation chunking (`transformer_ffn_chunk_size`,
+`transformer_row_chunk_size`) bounds peak memory for high-dimensional tables.
 
 ### Python Inference Lifecycle
 
@@ -807,11 +860,14 @@ Verify that the React component was built with `npm run build`, the API is reach
 - [Ho and Salimans. Classifier-Free Diffusion Guidance.](https://arxiv.org/abs/2207.12598)
 - [Song et al. Denoising Diffusion Implicit Models.](https://openreview.net/forum?id=St1giarCHLP)
 - [Shokri et al. Membership Inference Attacks Against Machine Learning Models.](https://doi.org/10.1109/SP.2017.41)
+- [Google Research. TabFM: Tabular Foundation Models (Apache-2.0, Copyright 2026 Google LLC).](https://github.com/google-research/tabfm)
 - Governo Digital. [Dados Abertos](https://www.gov.br/governodigital/pt-br/dados-abertos/dados-abertos), [Portal Brasileiro de Dados Abertos](https://www.gov.br/governodigital/pt-br/dados-abertos/portal-brasileiro-de-dados-abertos), and [API Portal de Dados Abertos](https://www.gov.br/conecta/catalogo/apis/api-portal-de-dados-abertos).
 
 ## License
 
-DATALUS is released under the Apache License 2.0.
+DATALUS is released under the Apache License 2.0. Techniques derived from
+TabFM (Apache-2.0, Copyright 2026 Google LLC) retain their attribution; see the
+`NOTICE` file.
 
 ## Citation
 
