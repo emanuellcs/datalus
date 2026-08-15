@@ -200,23 +200,80 @@ def train(
         None, "--resume-from", "-r", help="Resume training from checkpoint (optional)"
     ),
     gpu: str | None = typer.Option(None, "--gpu", help="CUDA device indices, e.g., '0' or '0,1' (optional)"),
-    keep_last: int | None = typer.Option(
-        None, "--keep-last", help="Keep only N most recent checkpoints (optional)"
+    keep_last: int = typer.Option(
+        3,
+        "--keep-last",
+        help="Keep only N most recent step checkpoints (0 = keep all; default: 3)",
     ),
     save_every: int = typer.Option(
         1,
         "--save-every",
-        help="Save a checkpoint every N epochs (default: 1)",
+        help="Save a checkpoint every N epochs, at epoch boundaries (default: 1)",
     ),
     checkpoint_every_steps: int = typer.Option(
         500,
         "--checkpoint-every-steps",
-        help="Save a checkpoint every N training steps (default: 500)",
+        help="Save a checkpoint every N training steps (0 disables; default: 500)",
+    ),
+    min_free_space: float = typer.Option(
+        2.0,
+        "--min-free-space",
+        help="Refuse checkpoint writes below this free-space threshold in GiB (0 disables; default: 2.0)",
     ),
     save_strategy: str = typer.Option(
         "latest",
         "--save-strategy",
         help="Strategy: 'all' (keep all), 'latest' (rolling), or 'best' (track lowest loss)",
+    ),
+    quantile_noise: float = typer.Option(
+        0.0,
+        "--quantile-noise",
+        help="RTDL-style relative noise for numeric quantile fitting (default: 0)",
+    ),
+    rtdl_quantile_dynamic: bool = typer.Option(
+        False,
+        "--rtdl-quantile-dynamic",
+        help="Use dynamic quantile count min(n_samples//30, 1000) floor 10",
+    ),
+    outlier_threshold: float | None = typer.Option(
+        None,
+        "--outlier-threshold",
+        help="Robust z-score clipping threshold for numeric columns (default: disabled)",
+    ),
+    numeric_standardize: bool = typer.Option(
+        False,
+        "--numeric-standardize",
+        help="Standardize quantile-encoded numeric values with clipping",
+    ),
+    cat_encoder_mode: str = typer.Option(
+        "alphabetical",
+        "--cat-encoder-mode",
+        help="Categorical ordering: 'alphabetical', 'appearance', or 'frequency'",
+    ),
+    min_cat_frequency: int = typer.Option(
+        1,
+        "--min-cat-frequency",
+        help="Collapse categories below this frequency to __UNKNOWN__ (default: 1 = preserve all)",
+    ),
+    denoiser_type: str = typer.Option(
+        "mlp",
+        "--denoiser-type",
+        help="Denoiser architecture: 'mlp' (residual MLP) or 'transformer' (TabFM-style attention)",
+    ),
+    target_column: str | None = typer.Option(
+        None,
+        "--target-column",
+        help="Optional target column for class-conditional (CFG) training",
+    ),
+    lambda_cat: float = typer.Option(
+        0.0,
+        "--lambda-cat",
+        help="Weight of the categorical cross-entropy loss (0 = pure MSE)",
+    ),
+    feature_augmentation: str = typer.Option(
+        "none",
+        "--feature-augmentation",
+        help="Training-time feature augmentation: 'none', 'crosses', or 'svd'",
     ),
 ) -> None:
     """Train a TabDDPM diffusion model on tabular data with deterministic checkpointing.
@@ -226,12 +283,15 @@ def train(
     full RNG state restoration. Use --verbose INFO to see epoch summaries and
     throughput metrics.
 
+    TabFM-inspired training techniques are opt-in; see the README for details.
+
     Checkpoint Management:
-      - Use --keep-last N to automatically delete old checkpoints (keeps N most recent)
+      - Use --keep-last N to rotate checkpoints (default: 3; 0 keeps all)
       - Use --save-strategy best to maintain a checkpoint_best.pt file tracking lowest loss
       - Use --save-strategy all to keep every checkpoint (default: latest - rolling)
-      - Use --save-every N to checkpoint every N epochs
-      - Use --checkpoint-every-steps N to checkpoint every N training steps
+      - Use --save-every N to checkpoint every N epochs, at epoch boundaries
+      - Use --checkpoint-every-steps N to checkpoint every N training steps (0 disables)
+      - Use --min-free-space to refuse writes below a free-space threshold (default: 2.0 GiB)
 
     Example:
         datalus train schema.json data.parquet ./checkpoints --epochs 10
@@ -242,6 +302,16 @@ def train(
     _apply_verbose(verbose)
     if save_strategy not in ("all", "latest", "best"):
         raise typer.BadParameter(f"{save_strategy!r} is not one of 'all', 'latest', 'best'.")
+    if cat_encoder_mode not in ("alphabetical", "appearance", "frequency"):
+        raise typer.BadParameter(
+            f"{cat_encoder_mode!r} is not one of 'alphabetical', 'appearance', 'frequency'."
+        )
+    if denoiser_type not in ("mlp", "transformer"):
+        raise typer.BadParameter(f"{denoiser_type!r} is not one of 'mlp', 'transformer'.")
+    if feature_augmentation not in ("none", "crosses", "svd"):
+        raise typer.BadParameter(
+            f"{feature_augmentation!r} is not one of 'none', 'crosses', 'svd'."
+        )
     _logger.info(f"Training on {data_path} with schema {schema_path}. Saving checkpoints to {output_dir}")
 
     trainer = DatalusTrainer(
@@ -255,7 +325,18 @@ def train(
             keep_last=keep_last,
             save_every=save_every,
             checkpoint_every_steps=checkpoint_every_steps,
+            min_free_space_gb=min_free_space,
             save_strategy=save_strategy,
+            quantile_noise=quantile_noise,
+            rtdl_quantile_dynamic=rtdl_quantile_dynamic,
+            outlier_threshold=outlier_threshold,
+            numeric_standardize=numeric_standardize,
+            cat_encoder_mode=cat_encoder_mode,
+            min_cat_frequency=min_cat_frequency,
+            denoiser_type=denoiser_type,
+            target_column=target_column,
+            lambda_cat=lambda_cat,
+            feature_augmentation=feature_augmentation,
         )
     )
     if resume_from is not None:
@@ -289,6 +370,11 @@ def sample(
         "--cfg-scale",
         help="Classifier-free guidance scale (default: 1.0 = disabled)",
     ),
+    conditions: str | None = typer.Option(
+        None,
+        "--conditions",
+        help='CFG conditions as JSON, e.g., \'{"target": "1"}\' (requires target-column training)',
+    ),
     checkpoint_source: str = typer.Option(
         "latest",
         "--checkpoint-source",
@@ -305,11 +391,21 @@ def sample(
         datalus sample checkpoint.pt encoder.json output.parquet --n-records 5000
         datalus sample --verbose INFO checkpoint.pt encoder.json output.parquet
         datalus sample ./checkpoints encoder.json output.parquet --checkpoint-source best
+        datalus sample checkpoint.pt encoder.json output.parquet \\
+            --conditions '{"target": "1"}' --cfg-scale 3.0
     """
     _apply_verbose(verbose)
     checkpoint_path = _resolve_checkpoint_path(checkpoint_path, checkpoint_source)
     _logger.info(f"Sampling {n_records} records from checkpoint {checkpoint_path}...")
-    frame = sample_records(checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale)
+    frame = sample_records(
+        checkpoint_path,
+        encoder_path,
+        n_records,
+        ddim_steps,
+        seed,
+        cfg_scale,
+        json.loads(conditions) if conditions else None,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(output_path, compression="snappy")
     typer.echo(f"Synthetic records written to {output_path}")
@@ -334,6 +430,11 @@ def augment(
         1.0,
         "--cfg-scale",
         help="Classifier-free guidance scale (default: 1.0 = disabled)",
+    ),
+    conditions: str | None = typer.Option(
+        None,
+        "--conditions",
+        help='CFG conditions as JSON, e.g., \'{"target": "1"}\' (requires target-column training)',
     ),
     checkpoint_source: str = typer.Option(
         "latest",
@@ -363,6 +464,7 @@ def augment(
         ddim_steps,
         seed,
         cfg_scale,
+        json.loads(conditions) if conditions else None,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(output_path, compression="snappy")
@@ -390,6 +492,11 @@ def balance(
         1.0,
         "--cfg-scale",
         help="Classifier-free guidance scale (default: 1.0 = disabled)",
+    ),
+    conditions: str | None = typer.Option(
+        None,
+        "--conditions",
+        help='CFG conditions as JSON, e.g., \'{"target": "1"}\' (requires target-column training)',
     ),
     max_attempts: int = typer.Option(10, "--max-attempts", help="Maximum sampling attempts (default: 10)"),
     strict: bool = typer.Option(False, "--strict", help="Fail if target distribution not achieved"),
@@ -425,6 +532,7 @@ def balance(
         cfg_scale,
         max_attempts,
         strict,
+        json.loads(conditions) if conditions else None,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frame.write_parquet(output_path, compression="snappy")

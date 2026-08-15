@@ -25,7 +25,10 @@ from datalus.export import (
     write_manifest,
 )
 from datalus.generation.bundle import (
+    base_denoiser_for_export,
+    build_context_vector,
     decode_latent,
+    drop_augmented_columns,
     intervention_latent_mask,
     latent_known_mask,
     load_model_bundle,
@@ -39,18 +42,30 @@ def sample_records(
     ddim_steps: int,
     seed: int,
     cfg_scale: float = 1.0,
+    conditions: dict[str, Any] | None = None,
 ) -> pl.DataFrame:
-    """Generate ab-initio synthetic records from a trained checkpoint."""
+    """Generate ab-initio synthetic records, optionally CFG-conditioned."""
 
-    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
+    diffusion, projector, encoder, device, model_config = load_model_bundle(
+        checkpoint_path,
+        encoder_path,
+    )
+    context = build_context_vector(
+        encoder,
+        model_config,
+        conditions,
+        n_records,
+        device,
+    )
     latent = diffusion.sample_ddim(
         (n_records, projector.total_latent_dim),
         device=device,
         ddim_steps=ddim_steps,
-        seed=seed,
+        context=context,
         cfg_scale=cfg_scale,
+        seed=seed,
     )
-    return decode_latent(latent, projector, encoder)
+    return drop_augmented_columns(decode_latent(latent, projector, encoder), encoder)
 
 
 def augment_records(
@@ -61,11 +76,20 @@ def augment_records(
     ddim_steps: int,
     seed: int,
     cfg_scale: float = 1.0,
+    conditions: dict[str, Any] | None = None,
 ) -> pl.DataFrame:
     """Append ab-initio synthetic rows to an existing tabular dataset."""
 
     original = pl.read_parquet(input_path)
-    synthetic = sample_records(checkpoint_path, encoder_path, n_records, ddim_steps, seed, cfg_scale)
+    synthetic = sample_records(
+        checkpoint_path,
+        encoder_path,
+        n_records,
+        ddim_steps,
+        seed,
+        cfg_scale,
+        conditions,
+    )
     return pl.concat([original, synthetic.select(original.columns)], how="vertical_relaxed")
 
 
@@ -80,8 +104,9 @@ def balance_records(
     cfg_scale: float = 1.0,
     max_attempts: int = 10,
     strict: bool = False,
+    conditions: dict[str, Any] | None = None,
 ) -> pl.DataFrame:
-    """Generate rows until requested target-class counts are reached."""
+    """Generate rows until requested class counts are reached, using per-class CFG contexts."""
 
     original = pl.read_parquet(input_path)
     if target_column not in original.columns:
@@ -99,17 +124,20 @@ def balance_records(
     attempt = 0
     while remaining > 0 and attempt < max_attempts:
         attempt += 1
-        candidate = sample_records(
-            checkpoint_path,
-            encoder_path,
-            max(remaining * 2, 1),
-            ddim_steps,
-            seed + attempt,
-            cfg_scale,
-        )
         for label, count in list(needed.items()):
-            if count <= 0 or target_column not in candidate.columns:
+            if count <= 0:
                 continue
+            label_conditions = dict(conditions or {})
+            label_conditions[target_column] = label
+            candidate = sample_records(
+                checkpoint_path,
+                encoder_path,
+                max(count * 2, 1),
+                ddim_steps,
+                seed + attempt,
+                cfg_scale,
+                label_conditions,
+            )
             matched = candidate.filter(pl.col(target_column).cast(pl.String) == label)
             take = matched.head(count)
             if len(take):
@@ -135,7 +163,7 @@ def inpaint_records(
 ) -> pl.DataFrame:
     """Fill null values in tabular records with RePaint-style masks."""
 
-    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
+    diffusion, projector, encoder, device, _ = load_model_bundle(checkpoint_path, encoder_path)
     frame = pl.read_parquet(input_path)
     encoded = encoder.transform(frame)
     x_num = torch.from_numpy(encoded.x_num).to(device) if encoded.x_num is not None else None
@@ -152,7 +180,7 @@ def inpaint_records(
         ),
         seed=seed,
     )
-    return decode_latent(latent, projector, encoder)
+    return drop_augmented_columns(decode_latent(latent, projector, encoder), encoder)
 
 
 def counterfactual_records(
@@ -165,7 +193,7 @@ def counterfactual_records(
 ) -> pl.DataFrame:
     """Generate records under explicit do-style column interventions."""
 
-    diffusion, projector, encoder, device = load_model_bundle(checkpoint_path, encoder_path)
+    diffusion, projector, encoder, device, _ = load_model_bundle(checkpoint_path, encoder_path)
     frame = pl.read_parquet(input_path)
     interventions: dict[str, Any] = json.loads(intervention_json)
     intervened = frame.with_columns([pl.lit(value).alias(column) for column, value in interventions.items()])
@@ -180,7 +208,7 @@ def counterfactual_records(
         RePaintConfig(num_inference_steps=ddim_steps, jump_length=10, jump_n_sample=5),
         seed=seed,
     )
-    return decode_latent(latent, projector, encoder)
+    return drop_augmented_columns(decode_latent(latent, projector, encoder), encoder)
 
 
 def export_onnx_artifacts(
@@ -191,18 +219,19 @@ def export_onnx_artifacts(
 ) -> None:
     """Export EMA denoiser weights and write an artifact manifest."""
 
-    diffusion, projector, encoder, _ = load_model_bundle(
+    diffusion, projector, encoder, _, _ = load_model_bundle(
         checkpoint_path,
         encoder_path,
         use_ema=True,
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    denoiser = base_denoiser_for_export(diffusion)
     fp32 = export_denoiser_onnx(
-        diffusion.denoiser,
+        denoiser,
         output_dir / "model_fp32.onnx",
         projector.total_latent_dim,
     )
-    parity = validate_onnx_parity(diffusion.denoiser, fp32, projector.total_latent_dim)
+    parity = validate_onnx_parity(denoiser, fp32, projector.total_latent_dim)
     artifacts = {"model_fp32": fp32.name}
     int8_parity = None
     if quantize:
